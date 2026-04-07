@@ -85,7 +85,7 @@ def init_db():
         FOREIGN KEY(task_id) REFERENCES tasks(id),
         FOREIGN KEY(prerequisite_id) REFERENCES tasks(id)
     )""")
-# Receipts table - now supports both receipts and general documents
+
     c.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY,
         file_path TEXT,
@@ -97,16 +97,26 @@ def init_db():
         notes TEXT,
         linked_expense_id INTEGER,
         linked_task_id INTEGER,
-        document_type TEXT DEFAULT 'receipt',   -- NEW: 'receipt' or 'document'
         ocr_text TEXT
     )""")
 
-    # Safe migration
+    # Permits
+    c.execute("""CREATE TABLE IF NOT EXISTS permits (
+        id INTEGER PRIMARY KEY,
+        name TEXT,
+        status TEXT,
+        required_date TEXT,
+        issued_date TEXT,
+        notes TEXT,
+        document_path TEXT
+    )""")
+
+    # === Safe migration for linked_task_id (Turso compatible) ===
     c.execute("PRAGMA table_info(receipts)")
     columns = [row[1] for row in c.fetchall()]
-    if "document_type" not in columns:
-        c.execute("ALTER TABLE receipts ADD COLUMN document_type TEXT DEFAULT 'receipt'")
-        print("✅ Added document_type column")
+    if "linked_task_id" not in columns:
+        c.execute("ALTER TABLE receipts ADD COLUMN linked_task_id INTEGER")
+        print("✅ Added missing column: linked_task_id")
 
     conn.commit()
 
@@ -118,7 +128,6 @@ def init_db():
 
     conn.close()
 
-# Keep the rest unchanged (get_project_config, update_project_config, row_to_dict)
 def get_project_config():
     conn = get_connection()
     c = conn.cursor()
