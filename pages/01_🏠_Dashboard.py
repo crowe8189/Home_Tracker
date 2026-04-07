@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from db.db_utils import get_project_config, get_connection
+from db.db_utils import get_project_config, get_connection, row_to_dict
 from utils.charts import create_budget_pie, create_spend_line, create_gantt
 from utils.alerts import get_all_alerts
 from datetime import date
@@ -43,20 +43,23 @@ st.plotly_chart(create_spend_line(), use_container_width=True)
 st.subheader("Full Gantt (Tasks + Permits)")
 st.plotly_chart(create_gantt(), use_container_width=True)
 
-# Current + Next focus (FIXED SQL - identical to app.py)
+# Current + Next focus (safe with Turso)
 conn = get_connection()
+c = conn.cursor()
 
-current_task = conn.execute("""
+c.execute("""
     SELECT 'Task' as Type, title as Name, due_date as Due 
     FROM tasks WHERE status != 'completed' 
     ORDER BY planned_start ASC LIMIT 1
-""").fetchone()
+""")
+current_task = row_to_dict(c, c.fetchone())
 
-current_permit = conn.execute("""
+c.execute("""
     SELECT 'Permit' as Type, name as Name, required_date as Due 
     FROM permits WHERE status = 'pending' 
     ORDER BY required_date ASC LIMIT 1
-""").fetchone()
+""")
+current_permit = row_to_dict(c, c.fetchone())
 
 if current_task and current_permit:
     current_item = current_task if current_task['Due'] <= current_permit['Due'] else current_permit
@@ -70,17 +73,19 @@ else:
 if current_item:
     st.subheader(f"📍 **Current**: {current_item['Name']} ({current_item['Type']}) — Due {current_item['Due']}")
 
-    next_task = conn.execute("""
+    c.execute("""
         SELECT 'Task' as Type, title as Name, due_date as Due 
         FROM tasks WHERE status != 'completed' 
         ORDER BY planned_start ASC LIMIT 1 OFFSET 1
-    """).fetchone()
+    """)
+    next_task = row_to_dict(c, c.fetchone())
 
-    next_permit = conn.execute("""
+    c.execute("""
         SELECT 'Permit' as Type, name as Name, required_date as Due 
         FROM permits WHERE status = 'pending' 
         ORDER BY required_date ASC LIMIT 1 OFFSET 1
-    """).fetchone()
+    """)
+    next_permit = row_to_dict(c, c.fetchone())
 
     if next_task and next_permit:
         next_item = next_task if next_task['Due'] <= next_permit['Due'] else next_permit
