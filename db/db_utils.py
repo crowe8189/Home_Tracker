@@ -94,7 +94,7 @@ def init_db():
         FOREIGN KEY(prerequisite_id) REFERENCES tasks(id)
     )""")
 
-    # Receipts
+    # Receipts - UPDATED to include linked_task_id
     c.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY,
         file_path TEXT,
@@ -105,8 +105,12 @@ def init_db():
         category TEXT,
         notes TEXT,
         linked_expense_id INTEGER,
+        linked_task_id INTEGER,           -- NEW column
         ocr_text TEXT
     )""")
+
+    # Add linked_task_id column if it doesn't exist yet (safe migration)
+    c.execute("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS linked_task_id INTEGER")
 
     # Permits
     c.execute("""CREATE TABLE IF NOT EXISTS permits (
