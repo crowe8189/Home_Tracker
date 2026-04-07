@@ -20,7 +20,6 @@ if uploaded_file:
         notes = st.text_area("Notes / Context")
         upload_date = st.date_input("Upload Date", date.today())
 
-        # Optional link to task
         link_to_task = st.checkbox("Link to an existing task")
         task_id = None
         if link_to_task:
@@ -48,10 +47,9 @@ if uploaded_file:
             st.success("✅ Document saved permanently!")
             st.rerun()
 
-# ====================== FILTERED LIST ======================
+# ====================== ALL DOCUMENTS WITH FILTER ======================
 st.subheader("All Documents")
 
-# Filter options
 filter_option = st.selectbox("Filter Documents", 
                              ["All Documents", "Linked to a Task", "Not Linked to any Task"])
 
@@ -87,30 +85,30 @@ conn.close()
 if df.empty:
     st.info("No general documents uploaded yet.")
 else:
-    # Show linked task name nicely
     st.dataframe(df.drop(columns=['id']), use_container_width=True, hide_index=True)
 
-    # Preview section
+    # ====================== ENHANCED PREVIEW ======================
     st.subheader("Preview Selected Document")
     selected_id = st.selectbox("Choose document", df['id'] if not df.empty else [None],
                                format_func=lambda x: df[df['id']==x]['original_filename'].iloc[0] if x else "None")
     if selected_id:
-        row = df[df['id'] == selected_id].iloc[0]
         conn = get_connection()
-        full_row = conn.execute("SELECT file_path FROM receipts WHERE id=?", (selected_id,)).fetchone()
+        row = conn.execute("SELECT * FROM receipts WHERE id=?", (selected_id,)).fetchone()
         conn.close()
         
-        if full_row and full_row['file_path'].lower().endswith(('.jpg', '.jpeg', '.png')):
-            st.image(full_row['file_path'], caption=row['original_filename'], use_column_width=True)
-        else:
-            st.info(f"📄 {row['original_filename']} (PDF or other document)")
+        st.caption(f"**{row['original_filename']}**")
 
+        if row['original_filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
+            st.image(row['file_path'], use_column_width=True)
+        else:
+            st.info("📄 PDF or other document – preview not available inline. Use the download button below.")
+        
         col1, col2 = st.columns([3,1])
         with col1:
-            st.link_button("📥 Download", url=full_row['file_path'], use_container_width=True)
+            st.link_button("📥 Download File", url=row['file_path'], use_container_width=True)
         with col2:
             if st.button("🗑️ Delete Document", type="secondary"):
-                delete_receipt_file(full_row['file_path'])
+                delete_receipt_file(row['file_path'])
                 conn = get_connection()
                 conn.execute("DELETE FROM receipts WHERE id=?", (selected_id,))
                 conn.commit()

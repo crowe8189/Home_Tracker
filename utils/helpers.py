@@ -18,40 +18,43 @@ def get_supabase_client() -> Client:
     )
 
 def save_uploaded_file(uploaded_file):
-    """Upload to Supabase Storage and return permanent public URL"""
+    """Upload to Supabase Storage with better error handling"""
     supabase = get_supabase_client()
     bucket = st.secrets["SUPABASE_BUCKET"]
     
-    # Create unique filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_path = f"receipts/{timestamp}_{uploaded_file.name}"
     
-    # Upload - FIXED: use getvalue() to get bytes
-    with st.spinner("Uploading receipt to Supabase Cloud..."):
-        res = supabase.storage.from_(bucket).upload(
-            file_path,
-            uploaded_file.getvalue(),                    # ← This was the fix
-            file_options={"content-type": uploaded_file.type}
-        )
+    try:
+        with st.spinner("Uploading to Supabase Cloud..."):
+            res = supabase.storage.from_(bucket).upload(
+                file_path,
+                uploaded_file.getvalue(),
+                file_options={"content-type": uploaded_file.type}
+            )
+    except Exception as e:
+        error_msg = str(e)
+        if "403" in error_msg or "Unauthorized" in error_msg:
+            st.error("❌ Upload failed: Permission error (403)")
+            st.info("Make sure you created both **INSERT** and **SELECT** policies for the 'receipts' bucket in Supabase Storage.")
+        else:
+            st.error(f"❌ Upload failed: {error_msg}")
+        st.stop()
     
-    # Get public URL
     public_url = supabase.storage.from_(bucket).get_public_url(file_path)
     return public_url
 
 def delete_receipt_file(file_url: str):
-    """Delete file from Supabase Storage"""
     if not file_url or "supabase.co" not in file_url:
         return
     supabase = get_supabase_client()
     bucket = st.secrets["SUPABASE_BUCKET"]
-    # Extract path from URL
     path = file_url.split("/storage/v1/object/public/receipts/")[-1]
     supabase.storage.from_(bucket).remove([f"receipts/{path}"])
 
 def perform_ocr(uploaded_file):
     try:
         import pytesseract
-        # For OCR we need a file-like object or path
         text = pytesseract.image_to_string(Image.open(uploaded_file))
         return text.strip() or "No text detected."
     except Exception:
