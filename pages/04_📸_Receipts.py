@@ -23,35 +23,39 @@ with tab1:
             category = st.text_input("Category", value="Electrical – Materials Only")
             notes = st.text_area("Notes")
             upload_date = st.date_input("Upload Date", date.today())
-            
-            # Link to Expense
+
+            # === Link to Expense ===
             link_to_expense = st.checkbox("Link to an existing expense")
             expense_id = None
             if link_to_expense:
                 conn = get_connection()
-                exp_options = pd.read_sql("SELECT id, description || ' ($' || amount || ')' as label FROM expenses", conn)
+                exp_options = pd.read_sql("""
+                    SELECT id, description || ' ($' || amount || ')' as label 
+                    FROM expenses ORDER BY date DESC
+                """, conn)
                 conn.close()
                 if not exp_options.empty:
-                    selected = st.selectbox("Select Expense", exp_options['label'])
-                    expense_id = exp_options[exp_options['label'] == selected]['id'].iloc[0]
-            
-            # NEW: Link to Task
+                    selected_exp = st.selectbox("Select Expense", exp_options['label'])
+                    expense_id = exp_options[exp_options['label'] == selected_exp]['id'].iloc[0]
+                else:
+                    st.info("No expenses yet. Add some in the Budget tab first.")
+
+            # === Link to Task ===
             link_to_task = st.checkbox("Link to an existing task")
             task_id = None
             if link_to_task:
                 conn = get_connection()
-                task_options = pd.read_sql("SELECT id, title as label FROM tasks", conn)
+                task_options = pd.read_sql("""
+                    SELECT id, title as label 
+                    FROM tasks ORDER BY planned_start ASC
+                """, conn)
                 conn.close()
                 if not task_options.empty:
                     selected_task = st.selectbox("Select Task", task_options['label'])
                     task_id = task_options[task_options['label'] == selected_task]['id'].iloc[0]
-            
-            # OCR
-            if uploaded_file.type.startswith("image"):
-                if st.form_submit_button("🔍 Run OCR"):
-                    ocr_text = perform_ocr(uploaded_file)
-                    st.text_area("OCR Result", ocr_text, height=150)
-            
+                else:
+                    st.info("No tasks yet. Add some in the Roadmap tab first.")
+
             submitted = st.form_submit_button("Save Receipt")
             if submitted:
                 conn = get_connection()
@@ -64,9 +68,8 @@ with tab1:
                      perform_ocr(uploaded_file) if uploaded_file.type.startswith("image") else None))
                 conn.commit()
                 conn.close()
-                st.success("✅ Receipt saved permanently!")
+                st.success("✅ Receipt saved permanently in Supabase!")
                 st.rerun()
-
 with tab2:
     st.subheader("All Uploaded Documents")
     conn = get_connection()
