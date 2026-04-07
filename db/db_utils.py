@@ -5,24 +5,30 @@ from datetime import date
 from utils.seeder import seed_data
 
 def get_connection():
-    """Connect to Turso cloud database"""
-    if "TURSO_URL" not in st.secrets or "TURSO_AUTH_TOKEN" not in st.secrets:
-        st.error("❌ Turso credentials missing in .streamlit/secrets.toml")
+    """Connect to Turso cloud database (fixed parameter name)"""
+    try:
+        if "TURSO_URL" not in st.secrets or "TURSO_AUTH_TOKEN" not in st.secrets:
+            st.error("❌ Turso credentials are missing in Streamlit Cloud Secrets")
+            st.stop()
+        
+        conn = libsql.connect(
+            database=st.secrets["TURSO_URL"],      # ← CHANGED: was "url"
+            auth_token=st.secrets["TURSO_AUTH_TOKEN"]
+        )
+        conn.row_factory = libsql.Row
+        return conn
+        
+    except Exception as e:
+        st.error(f"❌ Turso Connection Failed: {str(e)}")
+        st.info("Double-check your TURSO_URL and TURSO_AUTH_TOKEN in Secrets.")
         st.stop()
-    
-    conn = libsql.connect(
-        url=st.secrets["TURSO_URL"],
-        auth_token=st.secrets["TURSO_AUTH_TOKEN"]
-    )
-    conn.row_factory = libsql.Row   # Makes rows behave like sqlite3.Row
-    return conn
 
 def init_db():
     os.makedirs("uploads", exist_ok=True)
     conn = get_connection()
     c = conn.cursor()
 
-    # All your original CREATE TABLE statements (unchanged)
+    # Project config
     c.execute("""CREATE TABLE IF NOT EXISTS project_config (
         id INTEGER PRIMARY KEY CHECK (id=1),
         name TEXT NOT NULL,
@@ -31,6 +37,7 @@ def init_db():
         address TEXT
     )""")
 
+    # Budget categories
     c.execute("""CREATE TABLE IF NOT EXISTS budget_categories (
         id INTEGER PRIMARY KEY,
         name TEXT UNIQUE,
@@ -38,6 +45,7 @@ def init_db():
         notes TEXT
     )""")
 
+    # Expenses
     c.execute("""CREATE TABLE IF NOT EXISTS expenses (
         id INTEGER PRIMARY KEY,
         category_id INTEGER,
@@ -49,6 +57,7 @@ def init_db():
         FOREIGN KEY(category_id) REFERENCES budget_categories(id)
     )""")
 
+    # Phases
     c.execute("""CREATE TABLE IF NOT EXISTS phases (
         id INTEGER PRIMARY KEY,
         name TEXT,
@@ -56,6 +65,7 @@ def init_db():
         description TEXT
     )""")
 
+    # Tasks
     c.execute("""CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY,
         phase_id INTEGER,
@@ -70,6 +80,7 @@ def init_db():
         FOREIGN KEY(phase_id) REFERENCES phases(id)
     )""")
 
+    # Task dependencies
     c.execute("""CREATE TABLE IF NOT EXISTS task_dependencies (
         id INTEGER PRIMARY KEY,
         task_id INTEGER,
@@ -78,6 +89,7 @@ def init_db():
         FOREIGN KEY(prerequisite_id) REFERENCES tasks(id)
     )""")
 
+    # Receipts
     c.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY,
         file_path TEXT,
@@ -91,6 +103,7 @@ def init_db():
         ocr_text TEXT
     )""")
 
+    # Permits
     c.execute("""CREATE TABLE IF NOT EXISTS permits (
         id INTEGER PRIMARY KEY,
         name TEXT,
@@ -103,11 +116,11 @@ def init_db():
 
     conn.commit()
 
-    # Seed only once (first time the database is empty)
+    # Seed only once
     c.execute("SELECT COUNT(*) FROM project_config WHERE id=1")
     if c.fetchone()[0] == 0:
         seed_data(conn)
-        print("✅ Seeded Crowe's Nest Build on Turso cloud database")
+        print("✅ Crowe's Nest Build seeded on Turso cloud")
 
     conn.close()
 
