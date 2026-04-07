@@ -43,7 +43,7 @@ st.plotly_chart(create_spend_line(), use_container_width=True)
 st.subheader("Full Gantt (Tasks + Permits)")
 st.plotly_chart(create_gantt(), use_container_width=True)
 
-# Current + Next focus (safe with Turso)
+# Current + Next focus
 conn = get_connection()
 c = conn.cursor()
 

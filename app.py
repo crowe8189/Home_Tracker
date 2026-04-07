@@ -46,10 +46,10 @@ if alerts:
     for alert in alerts:
         st.info(alert["message"])
 
-# Current + Next focus (now safe with Turso)
+# Current + Next focus (safe with Turso)
 conn = get_connection()
-
 c = conn.cursor()
+
 c.execute("""
     SELECT 'Task' as Type, title as Name, due_date as Due 
     FROM tasks WHERE status != 'completed' 
@@ -64,7 +64,6 @@ c.execute("""
 """)
 current_permit = row_to_dict(c, c.fetchone())
 
-# Pick the earliest one
 if current_task and current_permit:
     current_item = current_task if current_task['Due'] <= current_permit['Due'] else current_permit
 elif current_task:
@@ -77,7 +76,6 @@ else:
 if current_item:
     st.subheader(f"📍 **Current**: {current_item['Name']} ({current_item['Type']}) — Due {current_item['Due']}")
 
-    # Next item
     c.execute("""
         SELECT 'Task' as Type, title as Name, due_date as Due 
         FROM tasks WHERE status != 'completed' 
@@ -106,4 +104,4 @@ if current_item:
 
 conn.close()
 
-st.caption("Crowe's Nest Build v1.0 • Fully shared on Turso + Supabase")
+st.caption("Crowe's Nest Build v1.0 • Shared on Turso + Supabase")
