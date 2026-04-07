@@ -26,11 +26,11 @@ def save_uploaded_file(uploaded_file):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_path = f"receipts/{timestamp}_{uploaded_file.name}"
     
-    # Upload
-    with st.spinner("Uploading receipt to cloud..."):
+    # Upload - FIXED: use getvalue() to get bytes
+    with st.spinner("Uploading receipt to Supabase Cloud..."):
         res = supabase.storage.from_(bucket).upload(
             file_path,
-            uploaded_file.getbuffer(),
+            uploaded_file.getvalue(),                    # ← This was the fix
             file_options={"content-type": uploaded_file.type}
         )
     
@@ -48,10 +48,11 @@ def delete_receipt_file(file_url: str):
     path = file_url.split("/storage/v1/object/public/receipts/")[-1]
     supabase.storage.from_(bucket).remove([f"receipts/{path}"])
 
-def perform_ocr(file_path):
+def perform_ocr(uploaded_file):
     try:
         import pytesseract
-        text = pytesseract.image_to_string(Image.open(file_path))
+        # For OCR we need a file-like object or path
+        text = pytesseract.image_to_string(Image.open(uploaded_file))
         return text.strip() or "No text detected."
     except Exception:
         return "OCR unavailable – install Tesseract OCR on your system."
