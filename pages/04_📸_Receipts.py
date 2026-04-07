@@ -7,10 +7,11 @@ from utils.helpers import save_uploaded_file, perform_ocr, export_to_csv, delete
 st.title("📸 Receipt & Document Management")
 st.caption("Files stored permanently in Supabase • Link to expenses or tasks")
 
-tab1, tab2, tab3 = st.tabs(["Upload New", "All Documents", "Linked Receipts"])
+tab1, tab2, tab3 = st.tabs(["💰 Upload Receipt", "📋 All Receipts", "🔗 Linked Receipts"])
 
+# ====================== TAB 1: Upload Receipt ======================
 with tab1:
-    st.subheader("Upload Receipt / Document")
+    st.subheader("Upload Receipt")
     uploaded_file = st.file_uploader("Choose file (JPG, PNG, PDF)", type=["jpg", "jpeg", "png", "pdf"])
     
     if uploaded_file:
@@ -24,14 +25,14 @@ with tab1:
             notes = st.text_area("Notes")
             upload_date = st.date_input("Upload Date", date.today())
 
-            # === Link to Task (optional) ===
+            # Link to Task (optional)
             link_to_task = st.checkbox("Link receipt to an existing task")
             task_id = None
             if link_to_task:
                 conn = get_connection()
                 task_options = pd.read_sql("""
-                    SELECT id, title as label 
-                    FROM tasks 
+                    SELECT id, title as label
+                    FROM tasks
                     ORDER BY planned_start ASC
                 """, conn)
                 conn.close()
@@ -51,45 +52,48 @@ with tab1:
             if submitted:
                 conn = get_connection()
                 
-                # 1. Auto-create new expense from receipt data
+                # Auto-create new expense from receipt data
                 cat_id = conn.execute("SELECT id FROM budget_categories WHERE name=?", (category,)).fetchone()
                 if cat_id:
                     cat_id = cat_id[0]
                 else:
-                    # fallback to first category if exact match not found
                     cat_id = conn.execute("SELECT id FROM budget_categories LIMIT 1").fetchone()[0]
 
-                conn.execute("""INSERT INTO expenses 
+                conn.execute("""INSERT INTO expenses
                     (category_id, date, amount, description, vendor)
                     VALUES (?,?,?,?,?)""",
-                    (cat_id, upload_date.strftime("%Y-%m-%d"), amount, 
+                    (cat_id, upload_date.strftime("%Y-%m-%d"), amount,
                      f"Receipt: {vendor} - {notes[:50]}...", vendor))
                 expense_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-                # 2. Save the receipt and link it to the new expense + optional task
-                conn.execute("""INSERT INTO receipts 
-                    (file_path, original_filename, upload_date, vendor, amount, category, notes, 
-                     linked_expense_id, linked_task_id, ocr_text)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)""", 
-                    (file_url, uploaded_file.name, upload_date.strftime("%Y-%m-%d"), 
-                     vendor, amount, category, notes, expense_id, task_id,
+                # Save the receipt
+                conn.execute("""INSERT INTO receipts
+                    (file_path, original_filename, upload_date, vendor, amount, category, notes,
+                     linked_expense_id, linked_task_id, document_type, ocr_text)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (file_url, uploaded_file.name, upload_date.strftime("%Y-%m-%d"),
+                     vendor, amount, category, notes, expense_id, task_id, "receipt",
                      perform_ocr(uploaded_file) if uploaded_file.type.startswith("image") else None))
                 
                 conn.commit()
                 conn.close()
                 st.success("✅ Receipt saved and new expense automatically created!")
                 st.rerun()
+
+# ====================== TAB 2: All Receipts (only shows receipts) ======================
 with tab2:
-    st.subheader("All Uploaded Documents")
+    st.subheader("All Receipts")
     conn = get_connection()
     df = pd.read_sql("""
-        SELECT id, original_filename, upload_date, vendor, amount, category, notes, 
-               file_path, linked_expense_id, linked_task_id 
-        FROM receipts ORDER BY upload_date DESC
+        SELECT id, original_filename, upload_date, vendor, amount, category, notes,
+               file_path, linked_expense_id, linked_task_id
+        FROM receipts 
+        WHERE document_type = 'receipt'
+        ORDER BY upload_date DESC
     """, conn)
     conn.close()
     
-    st.dataframe(df.drop(columns=['file_path', 'linked_expense_id', 'linked_task_id']), 
+    st.dataframe(df.drop(columns=['file_path', 'linked_expense_id', 'linked_task_id']),
                  use_container_width=True, hide_index=True)
     
     st.subheader("Preview Selected Receipt")
@@ -113,15 +117,17 @@ with tab2:
                 st.success("Receipt and file deleted")
                 st.rerun()
 
+# ====================== TAB 3: Linked Receipts ======================
 with tab3:
     st.subheader("Receipts Linked to Expenses or Tasks")
     conn = get_connection()
     linked_df = pd.read_sql("""
-        SELECT r.original_filename, r.amount, r.vendor, 
+        SELECT r.original_filename, r.amount, r.vendor,
                e.description as expense_desc, t.title as task_title, r.upload_date
-        FROM receipts r 
+        FROM receipts r
         LEFT JOIN expenses e ON r.linked_expense_id = e.id
         LEFT JOIN tasks t ON r.linked_task_id = t.id
+        WHERE r.document_type = 'receipt'
         ORDER BY r.upload_date DESC
     """, conn)
     conn.close()

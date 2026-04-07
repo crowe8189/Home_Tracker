@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
-from db.db_utils import get_connection
+from db.db_utils import get_connection, row_to_dict
 from utils.helpers import save_uploaded_file, perform_ocr, export_to_csv, delete_receipt_file
 
 st.title("📄 Project Documents")
@@ -87,28 +87,32 @@ if df.empty:
 else:
     st.dataframe(df.drop(columns=['id']), use_container_width=True, hide_index=True)
 
-    # ====================== ENHANCED PREVIEW ======================
+    # Enhanced Preview
     st.subheader("Preview Selected Document")
     selected_id = st.selectbox("Choose document", df['id'] if not df.empty else [None],
                                format_func=lambda x: df[df['id']==x]['original_filename'].iloc[0] if x else "None")
     if selected_id:
         conn = get_connection()
-        row = conn.execute("SELECT * FROM receipts WHERE id=?", (selected_id,)).fetchone()
+        c = conn.cursor()
+        c.execute("SELECT * FROM receipts WHERE id=?", (selected_id,))
+        row = c.fetchone()
         conn.close()
         
-        st.caption(f"**{row['original_filename']}**")
+        row_dict = row_to_dict(c, row)
+        
+        st.caption(f"**{row_dict['original_filename']}**")
 
-        if row['original_filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
-            st.image(row['file_path'], use_column_width=True)
+        if row_dict['original_filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
+            st.image(row_dict['file_path'], use_column_width=True)
         else:
             st.info("📄 PDF or other document – preview not available inline. Use the download button below.")
         
         col1, col2 = st.columns([3,1])
         with col1:
-            st.link_button("📥 Download File", url=row['file_path'], use_container_width=True)
+            st.link_button("📥 Download", url=row_dict['file_path'], use_container_width=True)
         with col2:
             if st.button("🗑️ Delete Document", type="secondary"):
-                delete_receipt_file(row['file_path'])
+                delete_receipt_file(row_dict['file_path'])
                 conn = get_connection()
                 conn.execute("DELETE FROM receipts WHERE id=?", (selected_id,))
                 conn.commit()
