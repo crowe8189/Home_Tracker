@@ -24,41 +24,49 @@ with tab1:
             notes = st.text_area("Notes")
             upload_date = st.date_input("Upload Date", date.today())
 
-            # === Link to Expense ===
-            link_to_expense = st.checkbox("Link to an existing expense")
-            expense_id = None
-            if link_to_expense:
-                conn = get_connection()
-                exp_options = pd.read_sql("""
-                    SELECT id, description || ' ($' || amount || ')' as label 
-                    FROM expenses ORDER BY date DESC
-                """, conn)
-                conn.close()
-                if not exp_options.empty:
-                    selected_exp = st.selectbox("Select Expense", exp_options['label'])
-                    expense_id = exp_options[exp_options['label'] == selected_exp]['id'].iloc[0]
-                else:
-                    st.info("No expenses yet. Add some in the Budget tab first.")
-
-            # === Link to Task ===
-            link_to_task = st.checkbox("Link to an existing task")
+            # === Link to Task (optional) ===
+            link_to_task = st.checkbox("Link receipt to an existing task")
             task_id = None
             if link_to_task:
                 conn = get_connection()
                 task_options = pd.read_sql("""
                     SELECT id, title as label 
-                    FROM tasks ORDER BY planned_start ASC
+                    FROM tasks 
+                    ORDER BY planned_start ASC
                 """, conn)
                 conn.close()
                 if not task_options.empty:
                     selected_task = st.selectbox("Select Task", task_options['label'])
                     task_id = task_options[task_options['label'] == selected_task]['id'].iloc[0]
                 else:
-                    st.info("No tasks yet. Add some in the Roadmap tab first.")
+                    st.info("No tasks yet – add some in the Roadmap tab.")
+
+            # OCR option
+            if uploaded_file.type.startswith("image"):
+                if st.form_submit_button("🔍 Run OCR"):
+                    ocr_text = perform_ocr(uploaded_file)
+                    st.text_area("OCR Result", ocr_text, height=150)
 
             submitted = st.form_submit_button("Save Receipt")
             if submitted:
                 conn = get_connection()
+                
+                # 1. Auto-create new expense from receipt data
+                cat_id = conn.execute("SELECT id FROM budget_categories WHERE name=?", (category,)).fetchone()
+                if cat_id:
+                    cat_id = cat_id[0]
+                else:
+                    # fallback to first category if exact match not found
+                    cat_id = conn.execute("SELECT id FROM budget_categories LIMIT 1").fetchone()[0]
+
+                conn.execute("""INSERT INTO expenses 
+                    (category_id, date, amount, description, vendor)
+                    VALUES (?,?,?,?,?)""",
+                    (cat_id, upload_date.strftime("%Y-%m-%d"), amount, 
+                     f"Receipt: {vendor} - {notes[:50]}...", vendor))
+                expense_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+                # 2. Save the receipt and link it to the new expense + optional task
                 conn.execute("""INSERT INTO receipts 
                     (file_path, original_filename, upload_date, vendor, amount, category, notes, 
                      linked_expense_id, linked_task_id, ocr_text)
@@ -66,9 +74,10 @@ with tab1:
                     (file_url, uploaded_file.name, upload_date.strftime("%Y-%m-%d"), 
                      vendor, amount, category, notes, expense_id, task_id,
                      perform_ocr(uploaded_file) if uploaded_file.type.startswith("image") else None))
+                
                 conn.commit()
                 conn.close()
-                st.success("✅ Receipt saved permanently in Supabase!")
+                st.success("✅ Receipt saved and new expense automatically created!")
                 st.rerun()
 with tab2:
     st.subheader("All Uploaded Documents")
