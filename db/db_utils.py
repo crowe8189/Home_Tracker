@@ -23,7 +23,7 @@ def get_connection():
         st.stop()
 
 def row_to_dict(cursor, row):
-    """Convert libsql row to dict so row['column'] still works"""
+    """Convert libsql row to dict"""
     if row is None:
         return None
     return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
@@ -33,7 +33,7 @@ def init_db():
     conn = get_connection()
     c = conn.cursor()
 
-    # Project config
+    # === All tables (unchanged) ===
     c.execute("""CREATE TABLE IF NOT EXISTS project_config (
         id INTEGER PRIMARY KEY CHECK (id=1),
         name TEXT NOT NULL,
@@ -42,7 +42,6 @@ def init_db():
         address TEXT
     )""")
 
-    # Budget categories
     c.execute("""CREATE TABLE IF NOT EXISTS budget_categories (
         id INTEGER PRIMARY KEY,
         name TEXT UNIQUE,
@@ -50,7 +49,6 @@ def init_db():
         notes TEXT
     )""")
 
-    # Expenses
     c.execute("""CREATE TABLE IF NOT EXISTS expenses (
         id INTEGER PRIMARY KEY,
         category_id INTEGER,
@@ -62,7 +60,6 @@ def init_db():
         FOREIGN KEY(category_id) REFERENCES budget_categories(id)
     )""")
 
-    # Phases
     c.execute("""CREATE TABLE IF NOT EXISTS phases (
         id INTEGER PRIMARY KEY,
         name TEXT,
@@ -70,7 +67,6 @@ def init_db():
         description TEXT
     )""")
 
-    # Tasks
     c.execute("""CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY,
         phase_id INTEGER,
@@ -85,7 +81,6 @@ def init_db():
         FOREIGN KEY(phase_id) REFERENCES phases(id)
     )""")
 
-    # Task dependencies
     c.execute("""CREATE TABLE IF NOT EXISTS task_dependencies (
         id INTEGER PRIMARY KEY,
         task_id INTEGER,
@@ -94,7 +89,6 @@ def init_db():
         FOREIGN KEY(prerequisite_id) REFERENCES tasks(id)
     )""")
 
-    # Receipts - UPDATED to include linked_task_id
     c.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY,
         file_path TEXT,
@@ -105,12 +99,9 @@ def init_db():
         category TEXT,
         notes TEXT,
         linked_expense_id INTEGER,
-        linked_task_id INTEGER,           -- NEW column
+        linked_task_id INTEGER,
         ocr_text TEXT
     )""")
-
-    # Add linked_task_id column if it doesn't exist yet (safe migration)
-    c.execute("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS linked_task_id INTEGER")
 
     # Permits
     c.execute("""CREATE TABLE IF NOT EXISTS permits (
@@ -122,6 +113,13 @@ def init_db():
         notes TEXT,
         document_path TEXT
     )""")
+
+    # === Safe migration for linked_task_id (Turso compatible) ===
+    c.execute("PRAGMA table_info(receipts)")
+    columns = [row[1] for row in c.fetchall()]
+    if "linked_task_id" not in columns:
+        c.execute("ALTER TABLE receipts ADD COLUMN linked_task_id INTEGER")
+        print("✅ Added missing column: linked_task_id")
 
     conn.commit()
 
