@@ -5,17 +5,20 @@ from datetime import date
 from utils.seeder import seed_data
 
 def get_connection():
-    """Connect to Turso cloud database (fixed parameter name)"""
+    """Connect to Turso cloud database"""
     try:
         if "TURSO_URL" not in st.secrets or "TURSO_AUTH_TOKEN" not in st.secrets:
             st.error("❌ Turso credentials are missing in Streamlit Cloud Secrets")
             st.stop()
         
         conn = libsql.connect(
-            database=st.secrets["TURSO_URL"],      # ← CHANGED: was "url"
+            database=st.secrets["TURSO_URL"],
             auth_token=st.secrets["TURSO_AUTH_TOKEN"]
         )
-        conn.row_factory = libsql.Row
+        
+        # Custom row factory so row['key'] still works (libsql returns tuples by default)
+        conn.row_factory = lambda cursor, row: dict(zip([col[0] for col in cursor.description], row))
+        
         return conn
         
     except Exception as e:
