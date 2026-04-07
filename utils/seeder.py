@@ -3,11 +3,13 @@ from datetime import datetime, timedelta
 def seed_data(conn):
     c = conn.cursor()
 
-    # Project config
-    c.execute("""INSERT OR REPLACE INTO project_config (id, name, total_budget, start_date, address)
-                 VALUES (1, "Crowe's Nest Build", 350000.0, "2026-04-07", "450 SR 27, Whitwell, TN 37397")""")
+    # Project config - parameterized to avoid quote issues
+    c.execute("""INSERT OR REPLACE INTO project_config 
+                 (id, name, total_budget, start_date, address)
+                 VALUES (1, ?, ?, ?, ?)""",
+              ("Crowe's Nest Build", 350000.0, "2026-04-07", "450 SR 27, Whitwell, TN 37397"))
 
-    # 12 Budget categories (exact sum = $350,000)
+    # 12 Budget categories
     categories = [
         ("Site Preparation & Dirtwork", 25000, ""),
         ("Foundation & Concrete", 45000, ""),
@@ -39,10 +41,10 @@ def seed_data(conn):
     ]
     c.executemany("INSERT OR REPLACE INTO phases (name, order_num, description) VALUES (?,?,?)", phases)
 
-    # 25 realistic tasks (full list)
+    # 25 realistic tasks (unchanged)
     start = datetime(2026, 4, 7)
     tasks_data = [
-        (1, "Clear lot & grade", "Remove trees, level site", (start).strftime("%Y-%m-%d"), (start+timedelta(days=5)).strftime("%Y-%m-%d"), (start+timedelta(days=7)).strftime("%Y-%m-%d"), "not_started", None, ""),
+        (1, "Clear lot & grade", "Remove trees, level site", start.strftime("%Y-%m-%d"), (start+timedelta(days=5)).strftime("%Y-%m-%d"), (start+timedelta(days=7)).strftime("%Y-%m-%d"), "not_started", None, ""),
         (1, "Install temporary utilities", "", (start+timedelta(days=3)).strftime("%Y-%m-%d"), (start+timedelta(days=10)).strftime("%Y-%m-%d"), (start+timedelta(days=12)).strftime("%Y-%m-%d"), "not_started", None, ""),
         (1, "Erosion control & silt fence", "", (start+timedelta(days=6)).strftime("%Y-%m-%d"), (start+timedelta(days=12)).strftime("%Y-%m-%d"), (start+timedelta(days=14)).strftime("%Y-%m-%d"), "not_started", None, ""),
         (2, "Dig footings", "", (start+timedelta(days=10)).strftime("%Y-%m-%d"), (start+timedelta(days=20)).strftime("%Y-%m-%d"), (start+timedelta(days=22)).strftime("%Y-%m-%d"), "not_started", None, ""),
@@ -73,24 +75,21 @@ def seed_data(conn):
         (phase_id, title, description, planned_start, planned_end, due_date, status, completed_date, notes) 
         VALUES (?,?,?,?,?,?,?,?,?)""", tasks_data)
 
-    # Sample dependencies (blocking relationships)
+    # Sample dependencies
     deps = [
         (4, 3), (7, 6), (10, 9), (13, 12), (16, 15),
         (19, 18), (22, 21), (25, 24)
     ]
     c.executemany("INSERT OR REPLACE INTO task_dependencies (task_id, prerequisite_id) VALUES (?,?)", deps)
 
-# ... (keep existing seed_data code up to the permits section)
-
-    # === NEW: Full realistic Permits & Inspections for Marion County TN ===
-    c.execute("DELETE FROM permits")  # clear old ones
+    # Permits & Inspections
+    c.execute("DELETE FROM permits")
     permits_data = [
         ("Septic System Permit", "pending", "2026-04-14", None, "TDEC – must be approved BEFORE building permit. Soil test required first.", None),
         ("County Building Permit", "pending", "2026-04-21", None, "Marion County – requires plans, septic approval, Owner/Builder Agreement", None),
         ("Electrical Permit (State)", "pending", "2026-05-01", None, "SFMO – required before rough electrical", None),
         ("Plumbing Permit", "pending", "2026-05-01", None, "Required before rough plumbing", None),
         ("Mechanical/HVAC Permit", "pending", "2026-05-01", None, "Required before rough HVAC", None),
-        # Inspections (treated as permit-type records for UI consistency)
         ("Footing Inspection", "pending", "2026-04-28", None, "After trenches + rebar. TERMITE TREATMENT REQUIRED FIRST.", None),
         ("Foundation Inspection", "pending", "2026-05-15", None, "After concrete cured + anchor bolts", None),
         ("Rough-In Inspection", "pending", "2026-07-01", None, "After framing + all rough trades. Do NOT insulate yet.", None),
@@ -100,5 +99,5 @@ def seed_data(conn):
         (name, status, required_date, issued_date, notes, document_path) 
         VALUES (?,?,?,?,?,?)""", permits_data)
 
-    # ... rest of your existing tasks/phases seeding
     conn.commit()
+    print("✅ All data seeded successfully on Turso")
