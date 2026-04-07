@@ -1,0 +1,8 @@
+streamlit>=1.38.0
+pandas
+plotly
+google-generativeai
+Pillow
+pytesseract
+libsql
+supabase          # ← NEW for persistent receipt uploads
