@@ -15,16 +15,18 @@ def get_connection():
             database=st.secrets["TURSO_URL"],
             auth_token=st.secrets["TURSO_AUTH_TOKEN"]
         )
-        
-        # Custom row factory so row['key'] still works (libsql returns tuples by default)
-        conn.row_factory = lambda cursor, row: dict(zip([col[0] for col in cursor.description], row))
-        
         return conn
         
     except Exception as e:
         st.error(f"❌ Turso Connection Failed: {str(e)}")
         st.info("Double-check your TURSO_URL and TURSO_AUTH_TOKEN in Secrets.")
         st.stop()
+
+def row_to_dict(cursor, row):
+    """Convert libsql row to dict so row['column'] still works"""
+    if row is None:
+        return None
+    return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
 
 def init_db():
     os.makedirs("uploads", exist_ok=True)
@@ -129,9 +131,11 @@ def init_db():
 
 def get_project_config():
     conn = get_connection()
-    row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
+    c = conn.cursor()
+    c.execute("SELECT * FROM project_config WHERE id=1")
+    row = c.fetchone()
     conn.close()
-    return dict(row) if row else None
+    return row_to_dict(c, row) if row else None
 
 def update_project_config(name, total_budget, start_date, address):
     conn = get_connection()
