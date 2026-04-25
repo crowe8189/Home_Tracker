@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import date
-from db.db_utils import get_connection, row_to_dict, get_current_focus
-from utils.helpers import save_uploaded_file, perform_ocr, export_to_csv, delete_receipt_file
+from db.db_utils import get_connection, get_current_focus
+from utils.helpers import save_uploaded_file, delete_receipt_file
 from utils.sidebar import render_sidebar
 
 render_sidebar()
@@ -52,7 +52,7 @@ else:
     st.dataframe(df[['original_filename', 'upload_date', 'file_category', 'notes']],
                  use_container_width=True, hide_index=True)
 
-    # ====================== GALLERY / PREVIEW ======================
+    # ====================== PREVIEW ======================
     st.subheader("📸 Preview Selected File")
     selected_id = st.selectbox(
         "Choose file",
@@ -67,9 +67,9 @@ else:
 
         st.caption(f"📄 {filename}")
 
-        # === FIXED: Handle Supabase URLs + local paths ===
+        # Preview image or document
         if file_path and (file_path.startswith("http://") or file_path.startswith("https://")):
-            # Cloud mode (Supabase public URL)
+            # Cloud (Supabase URL)
             if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
                 st.image(file_path, use_container_width=True)
             else:
@@ -83,10 +83,10 @@ else:
         else:
             st.warning("⚠️ File not found")
 
-        # Download button (works for both URLs and local files)
+        # Download - FIXED for Supabase URLs
         if file_path and (file_path.startswith("http://") or file_path.startswith("https://")):
             st.link_button("📥 Download File", url=file_path, use_container_width=True)
-        else:
+        elif file_path and os.path.exists(file_path):
             with open(file_path, "rb") as f:
                 st.download_button(
                     "📥 Download File",
@@ -95,7 +95,7 @@ else:
                     use_container_width=True
                 )
 
-        # Delete button
+        # Delete
         if st.button("🗑️ Delete File", type="secondary"):
             delete_receipt_file(file_path)
             conn = get_connection()
@@ -105,10 +105,10 @@ else:
             st.success("File deleted")
             st.rerun()
 
-        if row['ocr_text']:
+        if row.get('ocr_text'):
             st.text_area("OCR Text", row['ocr_text'], height=120)
 
-# ====================== QUICK GLOBAL UPLOAD ======================
+# ====================== QUICK UPLOAD ======================
 st.subheader("➕ Upload New File")
 uploaded = st.file_uploader("Any file (receipt, permit doc, plan, photo…)",
                            type=["jpg", "jpeg", "png", "pdf"])
@@ -123,23 +123,22 @@ if uploaded:
         cat = st.selectbox("Category", ["receipt", "permit", "plan", "photo", "contract", "general"])
         notes = st.text_area("Notes / Description")
 
-        # Smart auto-linking
         link_options = ["None"]
         default_index = 0
-        if current_focus["task"]:
+        if current_focus.get("task"):
             link_options.append(f"Current Task: {current_focus['task']['title']}")
             default_index = 1
-        if current_focus["permit"]:
+        if current_focus.get("permit"):
             link_options.append(f"Current Permit: {current_focus['permit']['name']}")
-            if not current_focus["task"]:
+            if not current_focus.get("task"):
                 default_index = 1
 
         link_to = st.selectbox("Link to", link_options, index=default_index)
 
         task_id = permit_id = None
-        if "Task" in link_to and current_focus["task"]:
+        if "Task" in link_to and current_focus.get("task"):
             task_id = current_focus["task"]["id"]
-        elif "Permit" in link_to and current_focus["permit"]:
+        elif "Permit" in link_to and current_focus.get("permit"):
             permit_id = current_focus["permit"]["id"]
 
         submitted = st.form_submit_button("Save File")

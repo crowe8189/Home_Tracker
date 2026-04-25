@@ -47,7 +47,7 @@ def render_sidebar():
         st.page_link("pages/08_🤖_AI_Assistant.py", label="🤖 AI Assistant", icon="🤖")
         st.page_link("pages/09_⚙️_Settings.py", label="⚙️ Settings", icon="⚙️")
         
-        # ====================== GLOBAL QUICK LOG (Mobile Optimized) ======================
+        # ====================== GLOBAL QUICK LOG ======================
         if st.button("➕ Quick Log (Photo / Receipt)", type="primary", use_container_width=True):
             with st.dialog("Quick Log — On-Site Capture"):
                 st.subheader("📸 Quick Log")
@@ -64,7 +64,6 @@ def render_sidebar():
                 file_to_save = camera_photo if camera_photo is not None else uploaded
                 notes = st.text_area("Notes / Description", height=100)
                 
-                # Smart auto-link
                 link_options = ["None"]
                 default_index = 0
                 if current_focus.get("task"):
