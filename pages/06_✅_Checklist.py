@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 from db.db_utils import get_connection
 from datetime import date
-
+from utils.sidebar import render_sidebar
+render_sidebar()
 st.title("✅ Smart Checklist Generator")
 st.caption("Auto-generate phase-specific checklists and push items directly into your task list")
 

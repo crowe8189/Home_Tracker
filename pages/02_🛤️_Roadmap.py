@@ -3,7 +3,8 @@ import pandas as pd
 from db.db_utils import get_connection
 from utils.charts import create_gantt
 from datetime import date
-
+from utils.sidebar import render_sidebar
+render_sidebar()
 st.title("🛤️ Project Roadmap & Tasks")
 
 tab1, tab2, tab3 = st.tabs(["📊 Gantt Timeline", "Tasks & Dependencies", "📋 Permits & Inspections"])
@@ -15,18 +16,28 @@ with tab1:
     st.plotly_chart(gantt_fig, use_container_width=True)
 
 # ====================== TAB 2: Standard Tasks ======================
+# ====================== TAB 2: Standard Tasks ======================
 with tab2:
     st.subheader("Tasks & Dependencies")
     
     conn = get_connection()
     df_tasks = pd.read_sql("""
-        SELECT t.id, p.name as Phase, t.title, t.description, 
-               t.planned_start, t.planned_end, t.due_date, t.status,
-               GROUP_CONCAT(pr.title) as Blocked_By
+        SELECT 
+            t.id, 
+            p.name as Phase, 
+            t.title, 
+            t.description,
+            t.planned_start, 
+            t.planned_end, 
+            t.due_date, 
+            t.status,
+            q.category as QOL_Category,
+            GROUP_CONCAT(pr.title) as Blocked_By
         FROM tasks t 
         JOIN phases p ON t.phase_id = p.id 
         LEFT JOIN task_dependencies d ON t.id = d.task_id 
         LEFT JOIN tasks pr ON d.prerequisite_id = pr.id 
+        LEFT JOIN qol_ideas q ON t.id = q.linked_task_id
         GROUP BY t.id
         ORDER BY p.order_num, t.planned_start
     """, conn)
@@ -46,6 +57,7 @@ with tab2:
             ),
             "Phase": st.column_config.TextColumn(disabled=True),
             "Blocked_By": st.column_config.TextColumn(disabled=True),
+            "QOL_Category": st.column_config.TextColumn("From QOL Idea", disabled=True, width="medium"),
         }
     )
 
@@ -107,7 +119,6 @@ with tab2:
                 conn.close()
                 st.success(f"Deleted: {delete_title}")
                 st.rerun()
-
 # ====================== TAB 3: Permits & Inspections ======================
 # ====================== TAB 3: Permits & Inspections ======================
 with tab3:
@@ -205,13 +216,27 @@ with tab3:
                         st.rerun()
 
         with colP3:
+            # NEW: Quick file attachment to selected permit
             if not df_permits.empty:
-                del_name = st.selectbox("🗑️ Delete Permit/Inspection", df_permits['name'].tolist(), key="delete_permit")
-                if st.button("Delete Selected", use_container_width=True):
-                    perm_id = df_permits[df_permits['name'] == del_name]['id'].iloc[0]
+                selected_permit_name = st.selectbox("📎 Attach file to permit", 
+                                                  df_permits['name'].tolist(), 
+                                                  key="attach_to_permit")
+                uploaded_attach = st.file_uploader("Upload permit doc / photo / soil test", 
+                                                 type=["jpg","jpeg","png","pdf"], 
+                                                 key="permit_upload")
+                if uploaded_attach and st.button("✅ Attach to Permit", use_container_width=True):
+                    file_url = save_uploaded_file(uploaded_attach)
+                    permit_id = df_permits[df_permits['name'] == selected_permit_name]['id'].iloc[0]
+                    
                     conn = get_connection()
-                    conn.execute("DELETE FROM permits WHERE id=?", (perm_id,))
+                    conn.execute("""INSERT INTO receipts 
+                        (file_path, original_filename, upload_date, vendor, amount, category, notes,
+                         linked_permit_id, file_category, document_type)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                        (file_url, uploaded_attach.name, date.today().strftime("%Y-%m-%d"),
+                         None, None, None, f"Attached to {selected_permit_name}",
+                         permit_id, "permit", "document"))
                     conn.commit()
                     conn.close()
-                    st.success(f"Deleted: {del_name}")
+                    st.success(f"✅ File attached to {selected_permit_name}!")
                     st.rerun()

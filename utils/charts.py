@@ -1,44 +1,33 @@
 import plotly.express as px
+import plotly.graph_objects as go
 import pandas as pd
 from db.db_utils import get_connection
 from datetime import timedelta
 
-def create_budget_pie():
-    conn = get_connection()
-    df = pd.read_sql("SELECT name, planned_amount as value FROM budget_categories", conn)
-    conn.close()
-    fig = px.pie(df, names='name', values='value', title='Budget Allocation by Category')
-    fig.update_traces(textinfo='percent+label')
-    return fig
-
-def create_spend_line():
-    conn = get_connection()
-    df = pd.read_sql("SELECT date, SUM(amount) as spend FROM expenses GROUP BY date ORDER BY date", conn)
-    conn.close()
-    if df.empty:
-        df = pd.DataFrame({'date': [pd.Timestamp.now().date()], 'spend': [0]})
-    fig = px.line(df, x='date', y='spend', title='Cumulative Spending Over Time', markers=True)
-    return fig
-
 def create_gantt():
-    """Gantt with full-width auto-scaling + monthly x-axis + visible permit bars"""
+    """Clean Gantt – Tasks at top, Permits grouped at the very bottom + yellow for blocked tasks"""
     conn = get_connection()
 
-    # Tasks
+    # === TASKS (keep phase order) ===
     df_tasks = pd.read_sql("""
         SELECT 
+            t.id,
             t.title as Task, 
             p.name as Phase, 
             t.planned_start as Start, 
             t.planned_end as Finish, 
             t.status as Status,
-            'Task' as Type
+            'Task' as Type,
+            GROUP_CONCAT(pr.title) as Blocked_By
         FROM tasks t 
         JOIN phases p ON t.phase_id = p.id 
+        LEFT JOIN task_dependencies d ON t.id = d.task_id 
+        LEFT JOIN tasks pr ON d.prerequisite_id = pr.id 
+        GROUP BY t.id
         ORDER BY p.order_num, t.planned_start
     """, conn)
 
-    # Permits
+    # === PERMITS (will be forced to bottom) ===
     df_permits = pd.read_sql("""
         SELECT 
             name as Task,
@@ -49,19 +38,23 @@ def create_gantt():
                 WHEN issued_date IS NOT NULL OR status = 'approved' THEN 'completed'
                 ELSE status 
             END as Status,
-            'Permit' as Type
+            'Permit' as Type,
+            NULL as Blocked_By
         FROM permits
+        ORDER BY required_date
     """, conn)
 
     conn.close()
 
-    # Combine
+    # Combine: Tasks first, then Permits
     df = pd.concat([df_tasks, df_permits], ignore_index=True)
 
     if df.empty:
-        return px.timeline(title="No tasks or permits yet")
+        fig = go.Figure()
+        fig.update_layout(title="No tasks or permits yet", height=400)
+        return fig
 
-    # Safe date conversion
+    # Convert dates
     df['Start'] = pd.to_datetime(df['Start'], errors='coerce')
     df['Finish'] = pd.to_datetime(df['Finish'], errors='coerce')
 
@@ -69,15 +62,19 @@ def create_gantt():
     mask = (df['Type'] == 'Permit') & (df['Status'] == 'pending')
     df.loc[mask, 'Finish'] = df.loc[mask, 'Start'] + pd.Timedelta(days=14)
 
+    # Identify blocked tasks (not started but has prerequisites)
+    df['Blocked_By'] = df['Blocked_By'].fillna('')
+    df['is_blocked'] = df['Blocked_By'].apply(lambda x: bool(x) and x.strip() != '')
+
     # Color map
     color_map = {
-        'not_started': '#87CEEB',
-        'in_progress': '#FFA500',
-        'completed':   '#32CD32',
-        'delayed':     '#FF0000',
-        'pending':     '#BA55D3',
-        'approved':    '#32CD32',
-        'denied':      '#FF0000'
+        'completed': '#32CD32',      # Green
+        'in_progress': "#190AEC",    # Orange
+        'not_started': "#ABCC17",    # Light blue
+        'delayed': '#FF0000',
+        'pending': '#BA55D3',
+        'approved': '#32CD32',
+        'denied': '#FF0000'
     }
 
     fig = px.timeline(
@@ -88,30 +85,46 @@ def create_gantt():
         color="Status",
         color_discrete_map=color_map,
         title="Project Gantt – Tasks + Permits & Inspections",
-        hover_data=["Phase", "Type"],
-        height=750
+        hover_data=["Phase", "Type", "Blocked_By"],
+        height=950,
     )
 
-    # === FULL-WIDTH AUTO-SCALE + EVERY MONTH ON X-AXIS ===
-    fig.update_xaxes(
-        dtick="M1",           # Show every single month
-        tickformat="%b %Y",   # Apr 2026, May 2026, etc.
-        tickangle=0,
-        showgrid=True,
-        automargin=True
-    )
-
+    # Full page width + spacing
     fig.update_layout(
-        autosize=True,        # ← Key for auto-scaling
-        width=None,           # ← Let Streamlit control full width
-        height=750,
+        autosize=True,
+        margin=dict(l=20, r=20, t=80, b=40),
         xaxis_title="Timeline",
         yaxis_title="",
         legend_title="Status",
-        bargap=0.15,
-        margin=dict(l=40, r=40, t=60, b=40)  # clean padding
+        bargap=0.28,
+        xaxis=dict(dtick="M1", tickformat="%b %Y", tickangle=0, showgrid=True)
     )
 
-    fig.update_yaxes(categoryorder="total ascending")
+    # FORCE correct vertical order: Tasks on top, Permits at bottom
+    task_list = df[df['Type'] == 'Task']['Task'].tolist()
+    permit_list = df[df['Type'] == 'Permit']['Task'].tolist()
+    fig.update_yaxes(
+        categoryorder="array",
+        categoryarray=task_list + permit_list
+    )
 
+    return fig
+
+# Keep the other functions unchanged
+def create_budget_pie():
+    conn = get_connection()
+    df = pd.read_sql("SELECT name, planned_amount as value FROM budget_categories", conn)
+    conn.close()
+    fig = px.pie(df, names='name', values='value', title='Budget Allocation by Category')
+    fig.update_traces(textinfo='percent+label')
+    return fig
+
+
+def create_spend_line():
+    conn = get_connection()
+    df = pd.read_sql("SELECT date, SUM(amount) as spend FROM expenses GROUP BY date ORDER BY date", conn)
+    conn.close()
+    if df.empty:
+        df = pd.DataFrame({'date': [pd.Timestamp.now().date()], 'spend': [0]})
+    fig = px.line(df, x='date', y='spend', title='Cumulative Spending Over Time', markers=True)
     return fig

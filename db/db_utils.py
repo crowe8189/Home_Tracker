@@ -1,36 +1,49 @@
-import libsql
 import streamlit as st
 import os
 from datetime import date
 from utils.seeder import seed_data
 
+# ====================== MODE DETECTION ======================
+def is_cloud_mode():
+    return "TURSO_URL" in st.secrets and "TURSO_AUTH_TOKEN" in st.secrets
+
+if is_cloud_mode():
+    import libsql
+    DB_MODE = "cloud"
+else:
+    import sqlite3
+    DB_MODE = "local"
+    DB_PATH = "home_build.db"
+
+# ====================== CONNECTION ======================
 def get_connection():
-    try:
+    if DB_MODE == "cloud":
         if "TURSO_URL" not in st.secrets or "TURSO_AUTH_TOKEN" not in st.secrets:
-            st.error("❌ Turso credentials are missing in Streamlit Cloud Secrets")
+            st.error("❌ Turso credentials missing in .streamlit/secrets.toml")
             st.stop()
-        
         conn = libsql.connect(
             database=st.secrets["TURSO_URL"],
             auth_token=st.secrets["TURSO_AUTH_TOKEN"]
         )
         return conn
-        
-    except Exception as e:
-        st.error(f"❌ Turso Connection Failed: {str(e)}")
-        st.stop()
+    else:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
 
-def row_to_dict(cursor, row):
+def row_to_dict(row):
+    """Works for BOTH local SQLite and Turso"""
     if row is None:
         return None
-    return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
+    return dict(row)
 
+# ====================== INIT DB ======================
 def init_db():
     os.makedirs("uploads", exist_ok=True)
     conn = get_connection()
     c = conn.cursor()
 
-    # === All tables (unchanged) ===
+    # === Create all tables ===
     c.execute("""CREATE TABLE IF NOT EXISTS project_config (
         id INTEGER PRIMARY KEY CHECK (id=1),
         name TEXT NOT NULL,
@@ -97,10 +110,13 @@ def init_db():
         notes TEXT,
         linked_expense_id INTEGER,
         linked_task_id INTEGER,
-        ocr_text TEXT
+        linked_permit_id INTEGER,
+        file_category TEXT DEFAULT 'general',
+        document_type TEXT,
+        ocr_text TEXT,
+        tags TEXT
     )""")
 
-    # Permits
     c.execute("""CREATE TABLE IF NOT EXISTS permits (
         id INTEGER PRIMARY KEY,
         name TEXT,
@@ -111,30 +127,43 @@ def init_db():
         document_path TEXT
     )""")
 
-    # === Safe migration for linked_task_id (Turso compatible) ===
-    c.execute("PRAGMA table_info(receipts)")
-    columns = [row[1] for row in c.fetchall()]
-    if "linked_task_id" not in columns:
-        c.execute("ALTER TABLE receipts ADD COLUMN linked_task_id INTEGER")
-        print("✅ Added missing column: linked_task_id")
+    c.execute("""CREATE TABLE IF NOT EXISTS qol_ideas (
+        id INTEGER PRIMARY KEY,
+        category TEXT NOT NULL,
+        description TEXT NOT NULL,
+        estimated_cost REAL,
+        status TEXT DEFAULT 'planned' CHECK(status IN ('planned', 'in_progress', 'implemented', 'deferred')),
+        linked_phase_id INTEGER,
+        linked_task_id INTEGER,
+        notes TEXT,
+        FOREIGN KEY(linked_phase_id) REFERENCES phases(id),
+        FOREIGN KEY(linked_task_id) REFERENCES tasks(id)
+    )""")
 
     conn.commit()
+
+    # === Migrations (safe to run every time) ===
+    c.execute("PRAGMA table_info(receipts)")
+    columns = [row[1] for row in c.fetchall()]
+    for col in ["linked_task_id", "linked_permit_id", "file_category", "tags"]:
+        if col not in columns:
+            c.execute(f"ALTER TABLE receipts ADD COLUMN {col} {'INTEGER' if 'id' in col else 'TEXT DEFAULT ''general'''}")
+            print(f"✅ Added missing column: {col}")
 
     # Seed only once
     c.execute("SELECT COUNT(*) FROM project_config WHERE id=1")
     if c.fetchone()[0] == 0:
         seed_data(conn)
-        print("✅ Crowe's Nest Build seeded on Turso cloud")
+        print(f"✅ Crowe's Nest Build seeded in {DB_MODE} mode!")
 
     conn.close()
 
+# ====================== PROJECT CONFIG ======================
 def get_project_config():
     conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM project_config WHERE id=1")
-    row = c.fetchone()
+    row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
     conn.close()
-    return row_to_dict(c, row) if row else None
+    return row_to_dict(row) if row else None
 
 def update_project_config(name, total_budget, start_date, address):
     conn = get_connection()
@@ -142,3 +171,30 @@ def update_project_config(name, total_budget, start_date, address):
                  (name, total_budget, start_date, address))
     conn.commit()
     conn.close()
+
+def get_current_focus():
+    """Returns current task and pending permit for smart auto-linking everywhere."""
+    conn = get_connection()
+    
+    # Current earliest non-completed task
+    task_row = conn.execute("""
+        SELECT id, title, due_date 
+        FROM tasks 
+        WHERE status != 'completed' 
+        ORDER BY planned_start ASC LIMIT 1
+    """).fetchone()
+    
+    # Current pending permit (earliest due)
+    permit_row = conn.execute("""
+        SELECT id, name, required_date 
+        FROM permits 
+        WHERE status = 'pending' 
+        ORDER BY required_date ASC LIMIT 1
+    """).fetchone()
+    
+    conn.close()
+    
+    return {
+        "task": row_to_dict(task_row) if task_row else None,
+        "permit": row_to_dict(permit_row) if permit_row else None
+    }

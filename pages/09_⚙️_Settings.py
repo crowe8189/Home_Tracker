@@ -6,7 +6,8 @@ from utils.helpers import export_to_csv
 import sqlite3
 import os
 from datetime import date
-
+from utils.sidebar import render_sidebar
+render_sidebar()
 st.title("⚙️ Settings & Project Management")
 st.caption("Edit project details, manage permits, reset data, and create backups")
 
@@ -71,10 +72,14 @@ with tab3:
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔄 Reset to My Project Defaults (Crowe's Nest $350k)", type="secondary"):
-            if st.checkbox("⚠️ This will DELETE all your current data and re-seed the original defaults. Confirm?", value=False):
+        st.write("**Danger Zone**")
+        confirm = st.checkbox("⚠️ I understand this will DELETE ALL current data and reset to the latest defaults (sitework complete, permits approved, footers this week)", 
+                             key="reset_confirm")
+        
+        if st.button("🔄 Reset to Current $450k Defaults", type="secondary", use_container_width=True):
+            if confirm:
                 conn = get_connection()
-                # Clear existing data
+                # Clear all data
                 conn.execute("DELETE FROM project_config WHERE id=1")
                 conn.execute("DELETE FROM budget_categories")
                 conn.execute("DELETE FROM expenses")
@@ -82,29 +87,52 @@ with tab3:
                 conn.execute("DELETE FROM task_dependencies")
                 conn.execute("DELETE FROM receipts")
                 conn.execute("DELETE FROM permits")
+                conn.execute("DELETE FROM qol_ideas")
                 conn.commit()
+                
+                # Re-seed with latest state
                 seed_data(conn)
                 conn.close()
-                st.success("✅ Database reset to original Crowe's Nest defaults (including septic permit)!")
+                
+                st.success("✅ Database fully reset! Site prep complete, septic + building permit approved, footers being poured this week.")
                 st.rerun()
-    
+            else:
+                st.error("Please check the confirmation box first.")
+
     with col2:
         st.write("Full Data Export")
-        tables = ["budget_categories", "expenses", "tasks", "receipts", "permits"]
+        tables = ["budget_categories", "expenses", "tasks", "receipts", "permits", "qol_ideas"]
         for t in tables:
-            if st.button(f"Download {t} CSV", key=t):
-                st.download_button(f"✅ {t}.csv", export_to_csv(t), f"{t}.csv", "text/csv", key=f"dl_{t}")
+            if st.button(f"Download {t} CSV", key=f"dl_{t}"):
+                st.download_button(f"✅ {t}.csv", export_to_csv(t), f"{t}.csv", "text/csv", key=f"download_{t}")
         
-        # Simple SQLite dump
+        # SQLite backup
         if st.button("Download Full Database Backup (.sql)"):
             conn = get_connection()
-            with open("backup.sql", "w") as f:
+            with open("backup.sql", "w", encoding="utf-8") as f:
                 for line in conn.iterdump():
                     f.write(f"{line}\n")
             conn.close()
             with open("backup.sql", "rb") as f:
                 st.download_button("✅ Download backup.sql", f.read(), "home_build_backup.sql", "text/plain")
-
+    
+        st.divider()
+        st.subheader("📋 Professional Construction Binder")
+        st.caption("Full project report with Gantt, budget, permits, and more — perfect for inspectors")
+        
+        if st.button("📄 Generate & Download Construction Binder (PDF)", type="primary", use_container_width=True):
+            with st.spinner("Generating professional PDF binder..."):
+                from utils.binder import generate_construction_binder
+                filename = generate_construction_binder()
+                with open(filename, "rb") as f:
+                    st.download_button(
+                        label="✅ Download Construction Binder.pdf",
+                        data=f.read(),
+                        file_name=filename,
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+            st.success("Binder generated successfully!")
 with tab4:
     st.subheader("About Crowe's Nest Build")
     st.markdown("""

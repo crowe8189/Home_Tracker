@@ -3,6 +3,5 @@ pandas
 plotly
 google-generativeai
 Pillow
-pytesseract
-libsql
-supabase          # ← NEW for persistent receipt uploads
+pytesseract          # optional – comment out if you don't want OCR
+fpdf
