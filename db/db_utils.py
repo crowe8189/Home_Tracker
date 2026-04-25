@@ -32,7 +32,7 @@ def get_connection():
         return conn
 
 def row_to_dict(row):
-    """Works for BOTH local SQLite and Turso"""
+    """Safely convert sqlite3.Row to dict. Handles None gracefully."""
     if row is None:
         return None
     return dict(row)
@@ -158,12 +158,22 @@ def init_db():
 
     conn.close()
 
-# ====================== PROJECT CONFIG ======================
 def get_project_config():
+    """Get project config — auto-initializes DB if missing (critical for Streamlit Cloud)."""
     conn = get_connection()
     row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
     conn.close()
-    return row_to_dict(row) if row else None
+
+    # If no config row exists yet → this is a fresh deploy or first run
+    if row is None:
+        print("⚠️  No project_config found — running init_db() now...")
+        init_db()                    # This creates tables + seeds data
+        # Try again
+        conn = get_connection()
+        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
+        conn.close()
+
+    return row_to_dict(row)
 
 def update_project_config(name, total_budget, start_date, address):
     conn = get_connection()
