@@ -3,9 +3,8 @@ pandas
 plotly
 google-generativeai
 Pillow
-pytesseract
+# pytesseract          # optional – comment out if you don't want OCR on cloud
 libsql
 supabase
-fpdf2 
+fpdf2
 kaleido
-fpdf
