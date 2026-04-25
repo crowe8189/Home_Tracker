@@ -6,7 +6,7 @@ from datetime import timedelta
 import streamlit as st
 
 def create_gantt():
-    """Responsive Gantt – much better on mobile (smaller height, tighter margins)"""
+    """Responsive Gantt – much better on mobile (smaller height, tighter margins, better fonts)"""
     conn = get_connection()
 
     # === TASKS (keep phase order) ===
@@ -28,7 +28,7 @@ def create_gantt():
         ORDER BY p.order_num, t.planned_start
     """, conn)
 
-    # === PERMITS (will be forced to bottom) ===
+    # === PERMITS (forced to bottom) ===
     df_permits = pd.read_sql("""
         SELECT 
             name as Task,
@@ -79,8 +79,9 @@ def create_gantt():
     }
 
     # === RESPONSIVE HEIGHT FOR MOBILE ===
+    # Auto-detect mobile based on screen width (works in PWA and browser)
     is_mobile = st.session_state.get("mobile", False) or st.session_state.get("width", 1200) < 768
-    height = 520 if is_mobile else 720
+    height = 520 if is_mobile else 720   # 520px on phone, 720px on desktop
 
     fig = px.timeline(
         df,
@@ -115,6 +116,8 @@ def create_gantt():
 
     return fig
 
+
+# === Unchanged helper charts ===
 def create_budget_pie():
     conn = get_connection()
     df = pd.read_sql("SELECT name, planned_amount as value FROM budget_categories", conn)
@@ -122,6 +125,7 @@ def create_budget_pie():
     fig = px.pie(df, names='name', values='value', title='Budget Allocation by Category')
     fig.update_traces(textinfo='percent+label')
     return fig
+
 
 def create_spend_line():
     conn = get_connection()

@@ -5,9 +5,21 @@ from utils.helpers import save_uploaded_file
 from utils.mobile_css import apply_mobile_optimizations   # ← NEW
 
 def render_sidebar():
-    """Shared sidebar – now also applies mobile CSS. Used by EVERY page."""
-    apply_mobile_optimizations()   # ← Applies mobile styling globally
-    
+    """Shared sidebar – now also applies mobile CSS + hides default nav on ALL pages."""
+    # === GLOBAL FIXES (applies to every page) ===
+    st.markdown("""
+    <style>
+        /* Hide Streamlit's default page navigation to prevent duplication */
+        [data-testid="stSidebarNav"] { 
+            display: none !important; 
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    from utils.mobile_css import apply_mobile_optimizations
+    apply_mobile_optimizations()   # mobile styling
+
+    # ←←← YOUR EXISTING CODE STARTS HERE (config, metrics, navigation, Quick Log, etc.)
     config = get_project_config()
     
     with st.sidebar:
