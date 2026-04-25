@@ -4,6 +4,11 @@ from db.db_utils import get_connection
 from utils.charts import create_gantt
 from datetime import date
 from utils.sidebar import render_sidebar
+from db.db_utils import init_db
+
+if "db_initialized" not in st.session_state:
+    init_db()
+    st.session_state.db_initialized = True
 render_sidebar()
 st.title("🛤️ Project Roadmap & Tasks")
 

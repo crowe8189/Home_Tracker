@@ -6,6 +6,11 @@ from utils.alerts import get_all_alerts
 from datetime import date
 from utils.helpers import save_uploaded_file
 from utils.sidebar import render_sidebar
+from db.db_utils import init_db
+
+if "db_initialized" not in st.session_state:
+    init_db()
+    st.session_state.db_initialized = True
 
 st.set_page_config(page_title="Crowe's Nest Build", layout="wide", page_icon="🏠")
 
