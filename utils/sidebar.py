@@ -47,7 +47,7 @@ def render_sidebar():
         st.page_link("pages/08_🤖_AI_Assistant.py", label="🤖 AI Assistant", icon="🤖")
         st.page_link("pages/09_⚙️_Settings.py", label="⚙️ Settings", icon="⚙️")
         
-        # ====================== GLOBAL QUICK LOG ======================
+        # ====================== GLOBAL QUICK LOG (Mobile Optimized) ======================
         if st.button("➕ Quick Log (Photo / Receipt)", type="primary", use_container_width=True):
             with st.dialog("Quick Log — On-Site Capture"):
                 st.subheader("📸 Quick Log")
@@ -67,20 +67,20 @@ def render_sidebar():
                 # Smart auto-link
                 link_options = ["None"]
                 default_index = 0
-                if current_focus["task"]:
+                if current_focus.get("task"):
                     link_options.append(f"Current Task: {current_focus['task']['title']}")
                     default_index = 1
-                if current_focus["permit"]:
+                if current_focus.get("permit"):
                     link_options.append(f"Current Permit: {current_focus['permit']['name']}")
-                    if not current_focus["task"]:
+                    if not current_focus.get("task"):
                         default_index = 1
                 
                 link_choice = st.selectbox("Link to", link_options, index=default_index)
                 
                 task_id = permit_id = None
-                if "Task" in link_choice and current_focus["task"]:
+                if "Task" in link_choice and current_focus.get("task"):
                     task_id = current_focus["task"]["id"]
-                elif "Permit" in link_choice and current_focus["permit"]:
+                elif "Permit" in link_choice and current_focus.get("permit"):
                     permit_id = current_focus["permit"]["id"]
                 
                 if st.button("✅ Save & Close", type="primary", use_container_width=True):
