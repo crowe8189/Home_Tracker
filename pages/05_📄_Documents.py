@@ -83,7 +83,7 @@ else:
         else:
             st.warning("⚠️ File not found")
 
-        # Download - FIXED for Supabase URLs
+# Download - works for both Supabase URLs and local files
         if file_path and (file_path.startswith("http://") or file_path.startswith("https://")):
             st.link_button("📥 Download File", url=file_path, use_container_width=True)
         elif file_path and os.path.exists(file_path):
@@ -94,6 +94,8 @@ else:
                     file_name=filename,
                     use_container_width=True
                 )
+        else:
+            st.warning("⚠️ Cannot download - file not found")
 
         # Delete
         if st.button("🗑️ Delete File", type="secondary"):
