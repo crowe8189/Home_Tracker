@@ -5,6 +5,19 @@ Generated on: unknown @ unknown
 ====================================================================================================
 
 ================================================================================
+FILE: .gitignore
+Path: C:\Python Projects\Home_Tracker\.gitignore
+Size: 0.1 KB
+================================================================================
+
+home_build.db
+uploads/
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+*.pyo
+
+================================================================================
 FILE: app.py
 Path: C:\Python Projects\Home_Tracker\app.py
 Size: 0.1 KB
@@ -16925,7 +16938,7 @@ SKIPPED (binary file): home_build.db
 ================================================================================
 FILE: Home_Tracker_codebase.txt
 Path: C:\Python Projects\Home_Tracker\Home_Tracker_codebase.txt
-Size: 1255.0 KB
+Size: 1255.3 KB
 ================================================================================
 
 ====================================================================================================
@@ -16933,6 +16946,19 @@ CODEBASE EXTRACTION
 Source folder: C:\Python Projects\Home_Tracker
 Generated on: unknown @ unknown
 ====================================================================================================
+
+================================================================================
+FILE: .gitignore
+Path: C:\Python Projects\Home_Tracker\.gitignore
+Size: 0.1 KB
+================================================================================
+
+home_build.db
+uploads/
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+*.pyo
 
 ================================================================================
 FILE: app.py
@@ -33715,11 +33741,12 @@ libsql
 supabase
 fpdf2 
 kaleido
+fpdf
 
 ================================================================================
 FILE: db\db_utils.py
 Path: C:\Python Projects\Home_Tracker\db\db_utils.py
-Size: 6.2 KB
+Size: 7.2 KB
 ================================================================================
 
 import streamlit as st
@@ -33756,10 +33783,23 @@ def get_connection():
         return conn
 
 def row_to_dict(row):
-    """Works for BOTH local SQLite and Turso"""
+    """Robust row → dict that works for BOTH local SQLite AND Turso/libsql on Streamlit Cloud."""
     if row is None:
         return None
-    return dict(row)
+    
+    # Turso / libsql rows (most common cause of crash on Cloud)
+    if hasattr(row, '_mapping'):
+        return dict(row._mapping)
+    
+    # Standard sqlite3.Row
+    if hasattr(row, 'keys'):
+        return dict(row)
+    
+    # Fallback for any other iterable/row-like object
+    try:
+        return dict(row)
+    except Exception:
+        return None
 
 # ====================== INIT DB ======================
 def init_db():
@@ -33882,12 +33922,28 @@ def init_db():
 
     conn.close()
 
-# ====================== PROJECT CONFIG ======================
 def get_project_config():
-    conn = get_connection()
-    row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
-    conn.close()
-    return row_to_dict(row) if row else None
+    """Get project config — auto-initializes DB if missing (critical for Streamlit Cloud)."""
+    try:
+        conn = get_connection()
+        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
+        conn.close()
+    except Exception as e:
+        print(f"⚠️  DB connection error: {e} — running init_db() now...")
+        init_db()
+        conn = get_connection()
+        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
+        conn.close()
+
+    # If still no row, run full init
+    if row is None:
+        print("⚠️  No project_config found — running init_db() now...")
+        init_db()
+        conn = get_connection()
+        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
+        conn.close()
+
+    return row_to_dict(row)
 
 def update_project_config(name, total_budget, start_date, address):
     conn = get_connection()
@@ -33934,7 +33990,7 @@ Size: 0.0 KB
 ================================================================================
 FILE: pages\01_🏠_Dashboard.py
 Path: C:\Python Projects\Home_Tracker\pages\01_🏠_Dashboard.py
-Size: 12.5 KB
+Size: 12.7 KB
 ================================================================================
 
 import streamlit as st
@@ -33945,6 +34001,11 @@ from utils.alerts import get_all_alerts
 from datetime import date
 from utils.helpers import save_uploaded_file
 from utils.sidebar import render_sidebar
+from db.db_utils import init_db
+
+if "db_initialized" not in st.session_state:
+    init_db()
+    st.session_state.db_initialized = True
 
 st.set_page_config(page_title="Crowe's Nest Build", layout="wide", page_icon="🏠")
 
@@ -34256,7 +34317,7 @@ st.caption("Crowe's Nest Build • Local-first Dashboard")
 ================================================================================
 FILE: pages\02_🛤️_Roadmap.py
 Path: C:\Python Projects\Home_Tracker\pages\02_🛤️_Roadmap.py
-Size: 11.9 KB
+Size: 12.0 KB
 ================================================================================
 
 import streamlit as st
@@ -34265,6 +34326,11 @@ from db.db_utils import get_connection
 from utils.charts import create_gantt
 from datetime import date
 from utils.sidebar import render_sidebar
+from db.db_utils import init_db
+
+if "db_initialized" not in st.session_state:
+    init_db()
+    st.session_state.db_initialized = True
 render_sidebar()
 st.title("🛤️ Project Roadmap & Tasks")
 
@@ -34505,7 +34571,7 @@ with tab3:
 ================================================================================
 FILE: pages\03_💰_Budget.py
 Path: C:\Python Projects\Home_Tracker\pages\03_💰_Budget.py
-Size: 6.1 KB
+Size: 6.2 KB
 ================================================================================
 
 import streamlit as st
@@ -34514,6 +34580,11 @@ from datetime import date
 from db.db_utils import get_connection, get_current_focus
 from utils.helpers import save_uploaded_file, perform_ocr, export_to_csv, import_csv
 from utils.sidebar import render_sidebar
+from db.db_utils import init_db
+
+if "db_initialized" not in st.session_state:
+    init_db()
+    st.session_state.db_initialized = True
 render_sidebar()
 st.title("💰 Budget & Financial Tracking")
 
@@ -36122,7 +36193,7 @@ def render_sidebar():
 
 ====================================================================================================
 EXTRACTION COMPLETE
-Total files included : 27
+Total files included : 28
 Files skipped        : 3
 Output file          : Home_Tracker_codebase.txt
 ====================================================================================================
