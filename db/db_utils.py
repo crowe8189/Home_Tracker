@@ -32,10 +32,23 @@ def get_connection():
         return conn
 
 def row_to_dict(row):
-    """Safely convert sqlite3.Row to dict. Handles None gracefully."""
+    """Robust row → dict that works for BOTH local SQLite AND Turso/libsql on Streamlit Cloud."""
     if row is None:
         return None
-    return dict(row)
+    
+    # Turso / libsql rows (most common cause of crash on Cloud)
+    if hasattr(row, '_mapping'):
+        return dict(row._mapping)
+    
+    # Standard sqlite3.Row
+    if hasattr(row, 'keys'):
+        return dict(row)
+    
+    # Fallback for any other iterable/row-like object
+    try:
+        return dict(row)
+    except Exception:
+        return None
 
 # ====================== INIT DB ======================
 def init_db():
@@ -160,15 +173,21 @@ def init_db():
 
 def get_project_config():
     """Get project config — auto-initializes DB if missing (critical for Streamlit Cloud)."""
-    conn = get_connection()
-    row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
-    conn.close()
+    try:
+        conn = get_connection()
+        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
+        conn.close()
+    except Exception as e:
+        print(f"⚠️  DB connection error: {e} — running init_db() now...")
+        init_db()
+        conn = get_connection()
+        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
+        conn.close()
 
-    # If no config row exists yet → this is a fresh deploy or first run
+    # If still no row, run full init
     if row is None:
         print("⚠️  No project_config found — running init_db() now...")
-        init_db()                    # This creates tables + seeds data
-        # Try again
+        init_db()
         conn = get_connection()
         row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
         conn.close()
