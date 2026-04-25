@@ -3,9 +3,10 @@ import plotly.graph_objects as go
 import pandas as pd
 from db.db_utils import get_connection
 from datetime import timedelta
+import streamlit as st
 
 def create_gantt():
-    """Clean Gantt – Tasks at top, Permits grouped at the very bottom + yellow for blocked tasks"""
+    """Responsive Gantt – much better on mobile (smaller height, tighter margins)"""
     conn = get_connection()
 
     # === TASKS (keep phase order) ===
@@ -62,20 +63,24 @@ def create_gantt():
     mask = (df['Type'] == 'Permit') & (df['Status'] == 'pending')
     df.loc[mask, 'Finish'] = df.loc[mask, 'Start'] + pd.Timedelta(days=14)
 
-    # Identify blocked tasks (not started but has prerequisites)
+    # Identify blocked tasks
     df['Blocked_By'] = df['Blocked_By'].fillna('')
     df['is_blocked'] = df['Blocked_By'].apply(lambda x: bool(x) and x.strip() != '')
 
     # Color map
     color_map = {
-        'completed': '#32CD32',      # Green
-        'in_progress': "#190AEC",    # Orange
-        'not_started': "#ABCC17",    # Light blue
+        'completed': '#32CD32',
+        'in_progress': "#190AEC",
+        'not_started': "#ABCC17",
         'delayed': '#FF0000',
         'pending': '#BA55D3',
         'approved': '#32CD32',
         'denied': '#FF0000'
     }
+
+    # === RESPONSIVE HEIGHT FOR MOBILE ===
+    is_mobile = st.session_state.get("mobile", False) or st.session_state.get("width", 1200) < 768
+    height = 520 if is_mobile else 720
 
     fig = px.timeline(
         df,
@@ -86,18 +91,18 @@ def create_gantt():
         color_discrete_map=color_map,
         title="Project Gantt – Tasks + Permits & Inspections",
         hover_data=["Phase", "Type", "Blocked_By"],
-        height=950,
+        height=height,
     )
 
-    # Full page width + spacing
     fig.update_layout(
         autosize=True,
-        margin=dict(l=20, r=20, t=80, b=40),
+        margin=dict(l=10, r=10, t=50, b=40),
         xaxis_title="Timeline",
         yaxis_title="",
         legend_title="Status",
-        bargap=0.28,
-        xaxis=dict(dtick="M1", tickformat="%b %Y", tickangle=0, showgrid=True)
+        bargap=0.25,
+        xaxis=dict(tickformat="%b %d", tickangle=-45),
+        font=dict(size=11 if is_mobile else 12),
     )
 
     # FORCE correct vertical order: Tasks on top, Permits at bottom
@@ -110,7 +115,6 @@ def create_gantt():
 
     return fig
 
-# Keep the other functions unchanged
 def create_budget_pie():
     conn = get_connection()
     df = pd.read_sql("SELECT name, planned_amount as value FROM budget_categories", conn)
@@ -118,7 +122,6 @@ def create_budget_pie():
     fig = px.pie(df, names='name', values='value', title='Budget Allocation by Category')
     fig.update_traces(textinfo='percent+label')
     return fig
-
 
 def create_spend_line():
     conn = get_connection()

@@ -2,9 +2,12 @@ import streamlit as st
 from datetime import date
 from db.db_utils import get_project_config, get_connection, get_current_focus
 from utils.helpers import save_uploaded_file
+from utils.mobile_css import apply_mobile_optimizations   # ← NEW
 
 def render_sidebar():
-    """Shared sidebar used by ALL pages — consistent navigation + metrics + Quick Log"""
+    """Shared sidebar – now also applies mobile CSS. Used by EVERY page."""
+    apply_mobile_optimizations()   # ← Applies mobile styling globally
+    
     config = get_project_config()
     
     with st.sidebar:
@@ -22,7 +25,6 @@ def render_sidebar():
         st.divider()
         
         # Navigation
-        # ====================== NAVIGATION ======================
         st.page_link("pages/01_🏠_Dashboard.py", label="🏠 Dashboard", icon="🏠")
         st.page_link("pages/02_🛤️_Roadmap.py", label="🛤️ Roadmap", icon="🛤️")
         st.page_link("pages/03_💰_Budget.py", label="💰 Budget", icon="💰")
