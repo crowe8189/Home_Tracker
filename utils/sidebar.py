@@ -7,7 +7,7 @@ from utils.mobile_css import apply_mobile_optimizations
 def render_sidebar():
     """Shared sidebar – mobile CSS + hides default nav + fixed Quick Log dialog"""
     
-    # === GLOBAL FIXES (applies to every page) ===
+    # === GLOBAL FIXES ===
     st.markdown("""
     <style>
         [data-testid="stSidebarNav"] { display: none !important; }
@@ -46,11 +46,11 @@ def render_sidebar():
         
         st.divider()
         
-        # ====================== QUICK LOG BUTTON (in sidebar) ======================
+        # Quick Log Button (inside sidebar)
         if st.button("➕ Quick Log (Photo / Receipt)", type="primary", use_container_width=True):
             st.session_state.show_quick_log = True
 
-    # ====================== QUICK LOG DIALOG (outside sidebar - REQUIRED) ======================
+    # ====================== QUICK LOG DIALOG (MUST BE OUTSIDE SIDEBAR) ======================
     if st.session_state.get("show_quick_log", False):
         with st.dialog("Quick Log — On-Site Capture"):
             st.subheader("📸 Quick Log")

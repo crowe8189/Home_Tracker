@@ -67,21 +67,43 @@ else:
 
         st.caption(f"📄 {filename}")
 
-        # Preview image or document
-        if file_path and (file_path.startswith("http://") or file_path.startswith("https://")):
-            # Cloud (Supabase URL)
+        # More forgiving check for Supabase URLs or local files
+        is_url = file_path and (file_path.startswith("http://") or file_path.startswith("https://"))
+        
+        if is_url:
             if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
                 st.image(file_path, use_container_width=True)
             else:
                 st.info(f"📄 {filename} (PDF or other document)")
         elif file_path and os.path.exists(file_path):
-            # Local mode
             if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
                 st.image(file_path, use_container_width=True)
             else:
                 st.info(f"📄 {filename} (PDF or other document)")
         else:
             st.warning("⚠️ File not found")
+
+        # Download
+        if is_url:
+            st.link_button("📥 Download File", url=file_path, use_container_width=True)
+        elif file_path and os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                st.download_button("📥 Download File", data=f.read(), file_name=filename, use_container_width=True)
+        else:
+            st.warning("⚠️ Cannot download - file not found")
+
+        # Delete
+        if st.button("🗑️ Delete File", type="secondary"):
+            delete_receipt_file(file_path)
+            conn = get_connection()
+            conn.execute("DELETE FROM receipts WHERE id=?", (selected_id,))
+            conn.commit()
+            conn.close()
+            st.success("File deleted")
+            st.rerun()
+
+        if row.get('ocr_text'):
+            st.text_area("OCR Text", row['ocr_text'], height=120)
 
 # Download - works for both Supabase URLs and local files
         if file_path and (file_path.startswith("http://") or file_path.startswith("https://")):
