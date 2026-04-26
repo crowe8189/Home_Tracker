@@ -33749,7 +33749,7 @@ kaleido
 ================================================================================
 FILE: db\db_utils.py
 Path: C:\Python Projects\Home_Tracker\db\db_utils.py
-Size: 7.2 KB
+Size: 8.1 KB
 ================================================================================
 
 import streamlit as st
@@ -33866,6 +33866,7 @@ def init_db():
         FOREIGN KEY(prerequisite_id) REFERENCES tasks(id)
     )""")
 
+    # Receipts - Updated for Quick Log + All Files Hub (Supabase/Turso compatible)
     c.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY,
         file_path TEXT,
@@ -33876,13 +33877,34 @@ def init_db():
         category TEXT,
         notes TEXT,
         linked_expense_id INTEGER,
+        ocr_text TEXT,
+        -- NEW COLUMNS for Quick Log / Documents Hub
+        file_category TEXT DEFAULT 'receipt',
         linked_task_id INTEGER,
         linked_permit_id INTEGER,
-        file_category TEXT DEFAULT 'general',
-        document_type TEXT,
-        ocr_text TEXT,
-        tags TEXT
+        document_type TEXT
     )""")
+
+    # === SAFE MIGRATION (runs on both local SQLite and Turso) ===
+    c.execute("PRAGMA table_info(receipts)")
+    existing_cols = {row[1] for row in c.fetchall()}   # set for fast lookup
+
+    new_columns = {
+        "file_category": "TEXT DEFAULT 'receipt'",
+        "linked_task_id": "INTEGER",
+        "linked_permit_id": "INTEGER",
+        "document_type": "TEXT"
+    }
+
+    for col_name, col_def in new_columns.items():
+        if col_name not in existing_cols:
+            try:
+                c.execute(f"ALTER TABLE receipts ADD COLUMN {col_name} {col_def}")
+                print(f"✅ Migrated receipts table: added column '{col_name}'")
+            except Exception as e:
+                print(f"⚠️ Migration warning for {col_name}: {e}")
+
+    conn.commit()
 
     c.execute("""CREATE TABLE IF NOT EXISTS permits (
         id INTEGER PRIMARY KEY,
@@ -33956,30 +33978,30 @@ def update_project_config(name, total_budget, start_date, address):
     conn.close()
 
 def get_current_focus():
-    """Returns current task and pending permit for smart auto-linking everywhere."""
+    """Returns current/next task + permit for Quick Log sidebar + Dashboard alerts"""
     conn = get_connection()
     
-    # Current earliest non-completed task
-    task_row = conn.execute("""
-        SELECT id, title, due_date 
+    # Current task (with due_date for overdue/current display)
+    task = conn.execute("""
+        SELECT id, title, due_date, planned_start, status
         FROM tasks 
         WHERE status != 'completed' 
-        ORDER BY planned_start ASC LIMIT 1
+        ORDER BY planned_start LIMIT 1
     """).fetchone()
     
-    # Current pending permit (earliest due)
-    permit_row = conn.execute("""
-        SELECT id, name, required_date 
+    # Next pending permit
+    permit = conn.execute("""
+        SELECT id, name, required_date
         FROM permits 
         WHERE status = 'pending' 
-        ORDER BY required_date ASC LIMIT 1
+        ORDER BY required_date LIMIT 1
     """).fetchone()
     
     conn.close()
     
     return {
-        "task": row_to_dict(task_row) if task_row else None,
-        "permit": row_to_dict(permit_row) if permit_row else None
+        "task": dict(task) if task else None,
+        "permit": dict(permit) if permit else None
     }
 
 ================================================================================
@@ -34781,7 +34803,7 @@ st.caption("📖 Site Diary • All photos and linked documents appear here auto
 ================================================================================
 FILE: pages\05_📄_Documents.py
 Path: C:\Python Projects\Home_Tracker\pages\05_📄_Documents.py
-Size: 7.0 KB
+Size: 5.9 KB
 ================================================================================
 
 import streamlit as st
@@ -34795,7 +34817,7 @@ from utils.sidebar import render_sidebar
 render_sidebar()
 
 st.title("📁 All Files Hub")
-st.caption("Receipts • Permits • Plans • Progress Photos • Contracts • Everything")
+st.caption("Receipts • Permits • Plans • Progress Photos • Contracts • Inspo")
 
 # Filters
 colA, colB, colC = st.columns([2, 1, 1])
@@ -34803,7 +34825,8 @@ with colA:
     search = st.text_input("🔍 Search files (filename, notes, OCR)", "")
 with colB:
     category_filter = st.selectbox("File Category",
-                                   ["All", "receipt", "permit", "plan", "photo", "contract", "general"],
+                                   ["All", "receipt", "permit", "plan", "photo", 
+                                    "contract", "general", "inspo"],   # ← NEW
                                    index=0)
 with colC:
     date_filter = st.date_input("Uploaded after", value=None, label_visibility="collapsed")
@@ -34853,17 +34876,16 @@ else:
 
         st.caption(f"📄 {filename}")
 
-        # More forgiving check for Supabase URLs or local files
         is_url = file_path and (file_path.startswith("http://") or file_path.startswith("https://"))
         
         if is_url:
             if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-                st.image(file_path, use_container_width=True)
+                st.image(file_path, width="stretch")
             else:
                 st.info(f"📄 {filename} (PDF or other document)")
         elif file_path and os.path.exists(file_path):
             if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-                st.image(file_path, use_container_width=True)
+                st.image(file_path, width="stretch")
             else:
                 st.info(f"📄 {filename} (PDF or other document)")
         else:
@@ -34871,68 +34893,39 @@ else:
 
         # Download
         if is_url:
-            st.link_button("📥 Download File", url=file_path, use_container_width=True)
+            st.link_button("📥 Download File", url=file_path, key=f"link_file_{selected_id}")
         elif file_path and os.path.exists(file_path):
             with open(file_path, "rb") as f:
-                st.download_button("📥 Download File", data=f.read(), file_name=filename, use_container_width=True)
-        else:
-            st.warning("⚠️ Cannot download - file not found")
+                st.download_button("📥 Download File", data=f.read(), file_name=filename, key=f"download_file_{selected_id}")
 
         # Delete
-        if st.button("🗑️ Delete File", type="secondary"):
+        if st.button("🗑️ Delete File", type="secondary", key=f"delete_{selected_id}"):
             delete_receipt_file(file_path)
             conn = get_connection()
             conn.execute("DELETE FROM receipts WHERE id=?", (selected_id,))
             conn.commit()
             conn.close()
-            st.success("File deleted")
+            st.success("✅ File deleted")
             st.rerun()
 
         if row.get('ocr_text'):
-            st.text_area("OCR Text", row['ocr_text'], height=120)
-
-# Download - works for both Supabase URLs and local files
-        if file_path and (file_path.startswith("http://") or file_path.startswith("https://")):
-            st.link_button("📥 Download File", url=file_path, use_container_width=True)
-        elif file_path and os.path.exists(file_path):
-            with open(file_path, "rb") as f:
-                st.download_button(
-                    "📥 Download File",
-                    data=f.read(),
-                    file_name=filename,
-                    use_container_width=True
-                )
-        else:
-            st.warning("⚠️ Cannot download - file not found")
-
-        # Delete
-        if st.button("🗑️ Delete File", type="secondary"):
-            delete_receipt_file(file_path)
-            conn = get_connection()
-            conn.execute("DELETE FROM receipts WHERE id=?", (selected_id,))
-            conn.commit()
-            conn.close()
-            st.success("File deleted")
-            st.rerun()
-
-        if row.get('ocr_text'):
-            st.text_area("OCR Text", row['ocr_text'], height=120)
+            st.text_area("OCR Text", row['ocr_text'], height=120, key=f"ocr_{selected_id}")
 
 # ====================== QUICK UPLOAD ======================
 st.subheader("➕ Upload New File")
-uploaded = st.file_uploader("Any file (receipt, permit doc, plan, photo…)",
+uploaded = st.file_uploader("Any file (receipt, permit doc, plan, photo, inspo…)",
                            type=["jpg", "jpeg", "png", "pdf"])
 
 if uploaded:
     file_url = save_uploaded_file(uploaded)
     st.success("✅ Uploaded!")
-
     current_focus = get_current_focus()
-
+    
     with st.form("quick_file_form"):
-        cat = st.selectbox("Category", ["receipt", "permit", "plan", "photo", "contract", "general"])
+        cat = st.selectbox("Category", 
+                          ["receipt", "permit", "plan", "photo", "contract", "general", "inspo"])  # ← NEW
         notes = st.text_area("Notes / Description")
-
+        
         link_options = ["None"]
         default_index = 0
         if current_focus.get("task"):
@@ -34942,15 +34935,15 @@ if uploaded:
             link_options.append(f"Current Permit: {current_focus['permit']['name']}")
             if not current_focus.get("task"):
                 default_index = 1
-
+        
         link_to = st.selectbox("Link to", link_options, index=default_index)
-
+        
         task_id = permit_id = None
         if "Task" in link_to and current_focus.get("task"):
             task_id = current_focus["task"]["id"]
         elif "Permit" in link_to and current_focus.get("permit"):
             permit_id = current_focus["permit"]["id"]
-
+        
         submitted = st.form_submit_button("Save File")
         if submitted:
             conn = get_connection()
@@ -36104,7 +36097,7 @@ def seed_data(conn):
 ================================================================================
 FILE: utils\sidebar.py
 Path: C:\Python Projects\Home_Tracker\utils\sidebar.py
-Size: 5.2 KB
+Size: 4.7 KB
 ================================================================================
 
 import streamlit as st
@@ -36157,66 +36150,65 @@ def render_sidebar():
         
         # Quick Log Button (inside sidebar)
         if st.button("➕ Quick Log (Photo / Receipt)", type="primary", use_container_width=True):
-            st.session_state.show_quick_log = True
+                quick_log_dialog()   # ← This opens the dialog
 
-    # ====================== QUICK LOG DIALOG (MUST BE OUTSIDE SIDEBAR) ======================
-    if st.session_state.get("show_quick_log", False):
-        with st.dialog("Quick Log — On-Site Capture"):
-            st.subheader("📸 Quick Log")
-            current_focus = get_current_focus()
-            
-            col_cam, col_file = st.columns(2)
-            with col_cam:
-                camera_photo = st.camera_input("Take photo now", key="sidebar_cam")
-            with col_file:
-                uploaded = st.file_uploader("Or upload file", 
-                                          type=["jpg","jpeg","png","pdf"], 
-                                          key="sidebar_file")
-            
-            file_to_save = camera_photo if camera_photo is not None else uploaded
-            notes = st.text_area("Notes / Description", height=100)
-            
-            link_options = ["None"]
-            default_index = 0
-            if current_focus.get("task"):
-                link_options.append(f"Current Task: {current_focus['task']['title']}")
-                default_index = 1
-            if current_focus.get("permit"):
-                link_options.append(f"Current Permit: {current_focus['permit']['name']}")
-                if not current_focus.get("task"):
-                    default_index = 1
-            
-            link_choice = st.selectbox("Link to", link_options, index=default_index)
-            
-            task_id = permit_id = None
-            if "Task" in link_choice and current_focus.get("task"):
-                task_id = current_focus["task"]["id"]
-            elif "Permit" in link_choice and current_focus.get("permit"):
-                permit_id = current_focus["permit"]["id"]
-            
-            if st.button("✅ Save & Close", type="primary", use_container_width=True):
-                if file_to_save:
-                    file_url = save_uploaded_file(file_to_save)
-                    conn = get_connection()
-                    conn.execute("""INSERT INTO receipts 
-                        (file_path, original_filename, upload_date, notes, file_category,
-                         linked_task_id, linked_permit_id, document_type)
-                        VALUES (?,?,?,?,?,?,?,?)""",
-                        (file_url, 
-                         getattr(file_to_save, 'name', 'camera_photo.jpg'),
-                         date.today().strftime("%Y-%m-%d"),
-                         notes, "quick_log", task_id, permit_id, "document"))
-                    conn.commit()
-                    conn.close()
-                    st.success("✅ Saved and auto-linked!")
-                    st.session_state.show_quick_log = False
-                    st.rerun()
-                else:
-                    st.warning("Please take a photo or upload a file")
-            
-            if st.button("Cancel"):
-                st.session_state.show_quick_log = False
-                st.rerun()
+# ====================== QUICK LOG DIALOG (PROPER STREAMLIT DIALOG) ======================
+@st.dialog("Quick Log — On-Site Capture")
+def quick_log_dialog():
+    st.subheader("📸 Quick Log")
+    current_focus = get_current_focus()
+    
+    col_cam, col_file = st.columns(2)
+    with col_cam:
+        camera_photo = st.camera_input("Take photo now", key="sidebar_cam")
+    with col_file:
+        uploaded = st.file_uploader("Or upload file", 
+                                  type=["jpg","jpeg","png","pdf"], 
+                                  key="sidebar_file")
+    
+    file_to_save = camera_photo if camera_photo is not None else uploaded
+    notes = st.text_area("Notes / Description", height=100)
+    
+    # Link options
+    link_options = ["None"]
+    default_index = 0
+    if current_focus.get("task"):
+        link_options.append(f"Current Task: {current_focus['task']['title']}")
+        default_index = 1
+    if current_focus.get("permit"):
+        link_options.append(f"Current Permit: {current_focus['permit']['name']}")
+        if not current_focus.get("task"):
+            default_index = 1
+    
+    link_choice = st.selectbox("Link to", link_options, index=default_index)
+    
+    task_id = permit_id = None
+    if "Task" in link_choice and current_focus.get("task"):
+        task_id = current_focus["task"]["id"]
+    elif "Permit" in link_choice and current_focus.get("permit"):
+        permit_id = current_focus["permit"]["id"]
+    
+    if st.button("✅ Save & Close", type="primary", use_container_width=True):
+        if file_to_save:
+            file_url = save_uploaded_file(file_to_save)
+            conn = get_connection()
+            conn.execute("""INSERT INTO receipts 
+                (file_path, original_filename, upload_date, notes, file_category,
+                 linked_task_id, linked_permit_id, document_type)
+                VALUES (?,?,?,?,?,?,?,?)""",
+                (file_url, 
+                 getattr(file_to_save, 'name', 'camera_photo.jpg'),
+                 date.today().strftime("%Y-%m-%d"),
+                 notes, "quick_log", task_id, permit_id, "document"))
+            conn.commit()
+            conn.close()
+            st.success("✅ Saved and auto-linked!")
+            st.rerun()   # closes dialog automatically
+        else:
+            st.warning("Please take a photo or upload a file")
+
+    if st.button("Cancel"):
+        st.rerun()
 
 ====================================================================================================
 EXTRACTION COMPLETE
