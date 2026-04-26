@@ -9,7 +9,7 @@ from utils.sidebar import render_sidebar
 render_sidebar()
 
 st.title("📁 All Files Hub")
-st.caption("Receipts • Permits • Plans • Progress Photos • Contracts • Everything")
+st.caption("Receipts • Permits • Plans • Progress Photos • Contracts • Inspo")
 
 # Filters
 colA, colB, colC = st.columns([2, 1, 1])
@@ -17,7 +17,7 @@ with colA:
     search = st.text_input("🔍 Search files (filename, notes, OCR)", "")
 with colB:
     category_filter = st.selectbox("File Category",
-                                   ["All", "receipt", "permit", "plan", "photo", "contract", "general"],
+                                   ["All", "receipt", "permit", "plan", "photo", "contract", "general","Inspo"],
                                    index=0)
 with colC:
     date_filter = st.date_input("Uploaded after", value=None, label_visibility="collapsed")
@@ -124,7 +124,7 @@ if uploaded:
     current_focus = get_current_focus()
     
     with st.form("quick_file_form"):
-        cat = st.selectbox("Category", ["receipt", "permit", "plan", "photo", "contract", "general"])
+        cat = st.selectbox("Category", ["receipt", "permit", "plan", "photo", "contract", "general","Inspo"])
         notes = st.text_area("Notes / Description")
         
         link_options = ["None"]
