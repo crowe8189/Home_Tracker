@@ -112,7 +112,7 @@ def init_db():
         FOREIGN KEY(prerequisite_id) REFERENCES tasks(id)
     )""")
 
-    # Receipts (updated for Quick Log + All Files Hub)
+    # Receipts - Updated for Quick Log + All Files Hub (Supabase/Turso compatible)
     c.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY,
         file_path TEXT,
@@ -130,17 +130,25 @@ def init_db():
         linked_permit_id INTEGER,
         document_type TEXT
     )""")
-    new_cols = [
-    ("file_category", "TEXT DEFAULT 'receipt'"),
-    ("linked_task_id", "INTEGER"),
-    ("linked_permit_id", "INTEGER"),
-    ("document_type", "TEXT")
-    ]
 
-    for col_name, col_def in new_cols:
+    # === SAFE MIGRATION (runs on both local SQLite and Turso) ===
+    c.execute("PRAGMA table_info(receipts)")
+    existing_cols = {row[1] for row in c.fetchall()}   # set for fast lookup
+
+    new_columns = {
+        "file_category": "TEXT DEFAULT 'receipt'",
+        "linked_task_id": "INTEGER",
+        "linked_permit_id": "INTEGER",
+        "document_type": "TEXT"
+    }
+
+    for col_name, col_def in new_columns.items():
         if col_name not in existing_cols:
-            c.execute(f"ALTER TABLE receipts ADD COLUMN {col_name} {col_def}")
-            print(f"✅ Migrated receipts table: added {col_name}")
+            try:
+                c.execute(f"ALTER TABLE receipts ADD COLUMN {col_name} {col_def}")
+                print(f"✅ Migrated receipts table: added column '{col_name}'")
+            except Exception as e:
+                print(f"⚠️ Migration warning for {col_name}: {e}")
 
     conn.commit()
 
@@ -216,16 +224,18 @@ def update_project_config(name, total_budget, start_date, address):
     conn.close()
 
 def get_current_focus():
-    """Returns current task/permit for Quick Log linking"""
+    """Returns current task + permit for Quick Log sidebar"""
     conn = get_connection()
     task = conn.execute("""
-        SELECT id, title FROM tasks 
+        SELECT id, title 
+        FROM tasks 
         WHERE status != 'completed' 
         ORDER BY planned_start LIMIT 1
     """).fetchone()
     
     permit = conn.execute("""
-        SELECT id, name FROM permits 
+        SELECT id, name 
+        FROM permits 
         WHERE status = 'pending' 
         ORDER BY required_date LIMIT 1
     """).fetchone()
