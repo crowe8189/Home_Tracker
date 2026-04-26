@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import os
 from datetime import date
 from utils.seeder import seed_data
@@ -21,34 +22,48 @@ def get_connection():
         if "TURSO_URL" not in st.secrets or "TURSO_AUTH_TOKEN" not in st.secrets:
             st.error("❌ Turso credentials missing in .streamlit/secrets.toml")
             st.stop()
-        conn = libsql.connect(
+        return libsql.connect(
             database=st.secrets["TURSO_URL"],
             auth_token=st.secrets["TURSO_AUTH_TOKEN"]
         )
-        return conn
-    else:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 
 def row_to_dict(row):
-    """Robust row → dict that works for BOTH local SQLite AND Turso/libsql on Streamlit Cloud."""
+    """Robust row → dict for both sqlite3 and Turso/libsql."""
     if row is None:
         return None
-    
-    # Turso / libsql rows (most common cause of crash on Cloud)
     if hasattr(row, '_mapping'):
         return dict(row._mapping)
-    
-    # Standard sqlite3.Row
     if hasattr(row, 'keys'):
         return dict(row)
-    
-    # Fallback for any other iterable/row-like object
     try:
         return dict(row)
     except Exception:
         return None
+
+
+def read_df(query, conn, params=None):
+    """Execute SELECT and return pd.DataFrame — safe for both sqlite3 and libsql/Turso.
+
+    pandas read_sql does not work with libsql connections, so in cloud mode we
+    manually build the DataFrame from cursor results.
+    """
+    if DB_MODE == "local":
+        return pd.read_sql(query, conn)
+    # Cloud / Turso path
+    cursor = conn.execute(query) if params is None else conn.execute(query, params)
+    rows = cursor.fetchall()
+    if not rows:
+        try:
+            cols = [d[0] for d in cursor.description]
+        except Exception:
+            cols = []
+        return pd.DataFrame(columns=cols)
+    return pd.DataFrame([row_to_dict(r) for r in rows])
+
 
 # ====================== INIT DB ======================
 def init_db():
@@ -112,8 +127,7 @@ def init_db():
         FOREIGN KEY(prerequisite_id) REFERENCES tasks(id)
     )""")
 
-    # ====================== RECEIPTS TABLE + TURSO-SAFE MIGRATION ======================
-# Receipts
+    # Receipts — base columns only; new columns added via migration below
     c.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY,
         file_path TEXT,
@@ -126,28 +140,6 @@ def init_db():
         linked_expense_id INTEGER,
         ocr_text TEXT
     )""")
-
-# ====================== TURSO-SAFE MIGRATION (adds missing columns) ======================
-    c.execute("PRAGMA table_info(receipts)")
-    existing_cols = {row[1] for row in c.fetchall()}
-
-    new_columns = {
-        "file_category":    "TEXT DEFAULT 'receipt'",
-        "linked_task_id":   "INTEGER",
-        "linked_permit_id": "INTEGER",
-        "document_type":    "TEXT"
-    }
-
-    for col_name, col_def in new_columns.items():
-        if col_name not in existing_cols:
-            try:
-                c.execute(f"ALTER TABLE receipts ADD COLUMN {col_name} {col_def}")
-                print(f"✅ Migrated receipts: added column '{col_name}'")
-            except Exception as e:
-                print(f"⚠️ Column '{col_name}' already exists: {e}")
-
-    conn.commit()
-    print("✅ receipts table migration complete (Quick Log + Documents now work)")
 
     c.execute("""CREATE TABLE IF NOT EXISTS permits (
         id INTEGER PRIMARY KEY,
@@ -174,13 +166,26 @@ def init_db():
 
     conn.commit()
 
-    # === Migrations (safe to run every time) ===
+    # === TURSO-SAFE MIGRATION: add columns that didn't exist at initial deploy ===
     c.execute("PRAGMA table_info(receipts)")
-    columns = [row[1] for row in c.fetchall()]
-    for col in ["linked_task_id", "linked_permit_id", "file_category", "tags"]:
-        if col not in columns:
-            c.execute(f"ALTER TABLE receipts ADD COLUMN {col} {'INTEGER' if 'id' in col else 'TEXT DEFAULT ''general'''}")
-            print(f"✅ Added missing column: {col}")
+    existing_cols = {row[1] for row in c.fetchall()}
+
+    new_columns = {
+        "file_category":    "TEXT DEFAULT 'receipt'",
+        "linked_task_id":   "INTEGER",
+        "linked_permit_id": "INTEGER",
+        "document_type":    "TEXT",
+    }
+
+    for col_name, col_def in new_columns.items():
+        if col_name not in existing_cols:
+            try:
+                c.execute(f"ALTER TABLE receipts ADD COLUMN {col_name} {col_def}")
+                print(f"✅ Migrated receipts: added '{col_name}'")
+            except Exception as e:
+                print(f"⚠️ Migration note for '{col_name}': {e}")
+
+    conn.commit()
 
     # Seed only once
     c.execute("SELECT COUNT(*) FROM project_config WHERE id=1")
@@ -190,6 +195,7 @@ def init_db():
 
     conn.close()
 
+
 def get_project_config():
     """Get project config — auto-initializes DB if missing (critical for Streamlit Cloud)."""
     try:
@@ -197,15 +203,14 @@ def get_project_config():
         row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
         conn.close()
     except Exception as e:
-        print(f"⚠️  DB connection error: {e} — running init_db() now...")
+        print(f"⚠️ DB connection error: {e} — running init_db() now...")
         init_db()
         conn = get_connection()
         row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
         conn.close()
 
-    # If still no row, run full init
     if row is None:
-        print("⚠️  No project_config found — running init_db() now...")
+        print("⚠️ No project_config found — running init_db() now...")
         init_db()
         conn = get_connection()
         row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
@@ -213,36 +218,38 @@ def get_project_config():
 
     return row_to_dict(row)
 
+
 def update_project_config(name, total_budget, start_date, address):
     conn = get_connection()
-    conn.execute("UPDATE project_config SET name=?, total_budget=?, start_date=?, address=? WHERE id=1",
-                 (name, total_budget, start_date, address))
+    conn.execute(
+        "UPDATE project_config SET name=?, total_budget=?, start_date=?, address=? WHERE id=1",
+        (name, total_budget, start_date, address)
+    )
     conn.commit()
     conn.close()
 
+
 def get_current_focus():
-    """Returns current/next task + permit for Quick Log sidebar + Dashboard alerts"""
+    """Returns current task + next pending permit for Quick Log and Dashboard."""
     conn = get_connection()
-    
-    # Current task (with due_date for overdue/current display)
+
     task = conn.execute("""
         SELECT id, title, due_date, planned_start, status
-        FROM tasks 
-        WHERE status != 'completed' 
+        FROM tasks
+        WHERE status != 'completed'
         ORDER BY planned_start LIMIT 1
     """).fetchone()
-    
-    # Next pending permit
+
     permit = conn.execute("""
         SELECT id, name, required_date
-        FROM permits 
-        WHERE status = 'pending' 
+        FROM permits
+        WHERE status = 'pending'
         ORDER BY required_date LIMIT 1
     """).fetchone()
-    
+
     conn.close()
-    
+
     return {
-        "task": dict(task) if task else None,
-        "permit": dict(permit) if permit else None
+        "task":   row_to_dict(task),
+        "permit": row_to_dict(permit),
     }
