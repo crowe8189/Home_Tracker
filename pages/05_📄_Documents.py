@@ -11,14 +11,13 @@ render_sidebar()
 st.title("📁 All Files Hub")
 st.caption("Receipts • Permits • Plans • Progress Photos • Contracts • Inspo")
 
-# Filters (unchanged)
+# Filters
 colA, colB, colC = st.columns([2, 1, 1])
 with colA:
     search = st.text_input("🔍 Search files (filename, notes, OCR)", "")
 with colB:
     category_filter = st.selectbox("File Category",
-                                   ["All", "receipt", "permit", "plan", "photo", 
-                                    "contract", "general", "inspo"],
+                                   ["All", "receipt", "permit", "plan", "photo", "contract", "general", "inspo"],
                                    index=0)
 with colC:
     date_filter = st.date_input("Uploaded after", value=None, label_visibility="collapsed")
@@ -34,7 +33,7 @@ df = pd.read_sql("""
 """, conn)
 conn.close()
 
-# Filters (unchanged - omitted for brevity)
+# Apply filters
 if search:
     mask = (df['original_filename'].str.contains(search, case=False, na=False)) | \
            (df['notes'].str.contains(search, case=False, na=False)) | \
@@ -57,27 +56,28 @@ else:
             "id": st.column_config.NumberColumn(disabled=True),
             "original_filename": st.column_config.TextColumn("Filename"),
             "file_category": st.column_config.SelectboxColumn(
-                "Category", options=["receipt", "permit", "plan", "photo", "contract", "general", "inspo"]
+                "Category", 
+                options=["receipt", "permit", "plan", "photo", "contract", "general", "inspo"]
             ),
             "notes": st.column_config.TextColumn("Notes"),
             "upload_date": st.column_config.TextColumn(disabled=True),
         }
     )
 
-    if st.button("💾 Save Filename / Category / Notes Changes", type="primary"):
+    if st.button("💾 Save All Changes", type="primary"):
         conn = get_connection()
         for _, row in edited_df.iterrows():
             conn.execute("""
                 UPDATE receipts 
-                SET original_filename = ?, file_category = ?, notes = ?
-                WHERE id = ?
+                SET original_filename=?, file_category=?, notes=?
+                WHERE id=?
             """, (row['original_filename'], row['file_category'], row['notes'], int(row['id'])))
         conn.commit()
         conn.close()
         st.success("✅ Changes saved!")
         st.rerun()
 
-    # Preview section (graceful handling for missing files)
+    # Preview
     st.subheader("📸 Preview Selected File")
     selected_id = st.selectbox(
         "Choose file",
@@ -91,31 +91,35 @@ else:
         filename = row['original_filename']
         is_url = file_path and file_path.startswith(("http://", "https://"))
 
-        st.caption(f"📄 {filename} | Category: {row['file_category']}")
+        st.caption(f"📄 {filename}")
 
         if is_url or (file_path and os.path.exists(file_path)):
             if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
                 st.image(file_path, width="stretch")
             else:
-                st.info(f"📄 Document: {filename}")
+                st.info(f"📄 {filename}")
         else:
-            st.warning("⚠️ File not found on storage (but you can still edit/delete the DB row below)")
+            st.warning("⚠️ File not found on storage")
 
-        # Download + Delete
+        # Download
         if is_url:
-            st.link_button("📥 Download", url=file_path, key=f"link_{selected_id}")
+            st.link_button("📥 Download File", url=file_path, key=f"link_{selected_id}")
         elif file_path and os.path.exists(file_path):
             with open(file_path, "rb") as f:
-                st.download_button("📥 Download", data=f.read(), file_name=filename, key=f"dl_{selected_id}")
+                st.download_button("📥 Download File", data=f.read(), file_name=filename, key=f"dl_{selected_id}")
 
+        # Delete
         if st.button("🗑️ Delete File", type="secondary", key=f"del_{selected_id}"):
             delete_receipt_file(file_path)
             conn = get_connection()
             conn.execute("DELETE FROM receipts WHERE id=?", (selected_id,))
             conn.commit()
             conn.close()
-            st.success("File deleted")
+            st.success("✅ File deleted")
             st.rerun()
+
+        if row.get('ocr_text'):
+            st.text_area("OCR Text", row['ocr_text'], height=120, key=f"ocr_{selected_id}")
 
 # ====================== QUICK UPLOAD ======================
 st.subheader("➕ Upload New File")
@@ -124,7 +128,7 @@ uploaded = st.file_uploader("Any file (receipt, permit, plan, photo, inspo…)",
 
 if uploaded:
     file_url = save_uploaded_file(uploaded)
-    st.success("✅ Uploaded to storage!")
+    st.success("✅ Uploaded!")
     current_focus = get_current_focus()
     
     with st.form("quick_file_form"):

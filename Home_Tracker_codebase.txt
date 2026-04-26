@@ -33749,7 +33749,7 @@ kaleido
 ================================================================================
 FILE: db\db_utils.py
 Path: C:\Python Projects\Home_Tracker\db\db_utils.py
-Size: 8.1 KB
+Size: 8.3 KB
 ================================================================================
 
 import streamlit as st
@@ -33866,7 +33866,7 @@ def init_db():
         FOREIGN KEY(prerequisite_id) REFERENCES tasks(id)
     )""")
 
-    # Receipts - Updated for Quick Log + All Files Hub (Supabase/Turso compatible)
+    # ====================== RECEIPTS TABLE + TURSO-SAFE MIGRATION ======================
     c.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY,
         file_path TEXT,
@@ -33878,33 +33878,39 @@ def init_db():
         notes TEXT,
         linked_expense_id INTEGER,
         ocr_text TEXT,
-        -- NEW COLUMNS for Quick Log / Documents Hub
         file_category TEXT DEFAULT 'receipt',
         linked_task_id INTEGER,
         linked_permit_id INTEGER,
         document_type TEXT
     )""")
 
-    # === SAFE MIGRATION (runs on both local SQLite and Turso) ===
+    # Force-add any missing columns (works reliably on Turso)
     c.execute("PRAGMA table_info(receipts)")
-    existing_cols = {row[1] for row in c.fetchall()}   # set for fast lookup
+    existing_cols = {row[1] for row in c.fetchall()}
 
     new_columns = {
-        "file_category": "TEXT DEFAULT 'receipt'",
-        "linked_task_id": "INTEGER",
+        "file_category":    "TEXT DEFAULT 'receipt'",
+        "linked_task_id":   "INTEGER",
         "linked_permit_id": "INTEGER",
-        "document_type": "TEXT"
+        "document_type":    "TEXT"
     }
 
     for col_name, col_def in new_columns.items():
         if col_name not in existing_cols:
             try:
                 c.execute(f"ALTER TABLE receipts ADD COLUMN {col_name} {col_def}")
-                print(f"✅ Migrated receipts table: added column '{col_name}'")
+                print(f"✅ Added missing column: {col_name}")
             except Exception as e:
-                print(f"⚠️ Migration warning for {col_name}: {e}")
+                print(f"⚠️ Column {col_name} already exists or migration skipped: {e}")
+
+    # Clean only obvious test/ghost files (keeps your real uploads)
+    test_files = ["newplot.png", "image001.png"]
+    for fname in test_files:
+        c.execute("DELETE FROM receipts WHERE original_filename = ?", (fname,))
+        print(f"🧹 Removed test file row: {fname}")
 
     conn.commit()
+    print("✅ Receipts table fully ready (columns + test cleanup)")
 
     c.execute("""CREATE TABLE IF NOT EXISTS permits (
         id INTEGER PRIMARY KEY,
@@ -34803,7 +34809,7 @@ st.caption("📖 Site Diary • All photos and linked documents appear here auto
 ================================================================================
 FILE: pages\05_📄_Documents.py
 Path: C:\Python Projects\Home_Tracker\pages\05_📄_Documents.py
-Size: 5.9 KB
+Size: 6.7 KB
 ================================================================================
 
 import streamlit as st
@@ -34819,14 +34825,14 @@ render_sidebar()
 st.title("📁 All Files Hub")
 st.caption("Receipts • Permits • Plans • Progress Photos • Contracts • Inspo")
 
-# Filters
+# Filters (unchanged)
 colA, colB, colC = st.columns([2, 1, 1])
 with colA:
     search = st.text_input("🔍 Search files (filename, notes, OCR)", "")
 with colB:
     category_filter = st.selectbox("File Category",
                                    ["All", "receipt", "permit", "plan", "photo", 
-                                    "contract", "general", "inspo"],   # ← NEW
+                                    "contract", "general", "inspo"],
                                    index=0)
 with colC:
     date_filter = st.date_input("Uploaded after", value=None, label_visibility="collapsed")
@@ -34842,88 +34848,101 @@ df = pd.read_sql("""
 """, conn)
 conn.close()
 
-# Apply filters
+# Filters (unchanged - omitted for brevity)
 if search:
     mask = (df['original_filename'].str.contains(search, case=False, na=False)) | \
            (df['notes'].str.contains(search, case=False, na=False)) | \
            (df['ocr_text'].str.contains(search, case=False, na=False))
     df = df[mask]
-
 if category_filter != "All":
     df = df[df['file_category'] == category_filter]
-
 if date_filter:
     df = df[pd.to_datetime(df['upload_date']) >= pd.to_datetime(date_filter)]
 
 if df.empty:
     st.info("No files yet — upload below!")
 else:
-    st.dataframe(df[['original_filename', 'upload_date', 'file_category', 'notes']],
-                 use_container_width=True, hide_index=True)
+    st.subheader("📋 All Files (click cells to edit)")
+    edited_df = st.data_editor(
+        df[['id', 'original_filename', 'file_category', 'notes', 'upload_date']],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "id": st.column_config.NumberColumn(disabled=True),
+            "original_filename": st.column_config.TextColumn("Filename"),
+            "file_category": st.column_config.SelectboxColumn(
+                "Category", options=["receipt", "permit", "plan", "photo", "contract", "general", "inspo"]
+            ),
+            "notes": st.column_config.TextColumn("Notes"),
+            "upload_date": st.column_config.TextColumn(disabled=True),
+        }
+    )
 
-    # ====================== PREVIEW ======================
+    if st.button("💾 Save Filename / Category / Notes Changes", type="primary"):
+        conn = get_connection()
+        for _, row in edited_df.iterrows():
+            conn.execute("""
+                UPDATE receipts 
+                SET original_filename = ?, file_category = ?, notes = ?
+                WHERE id = ?
+            """, (row['original_filename'], row['file_category'], row['notes'], int(row['id'])))
+        conn.commit()
+        conn.close()
+        st.success("✅ Changes saved!")
+        st.rerun()
+
+    # Preview section (graceful handling for missing files)
     st.subheader("📸 Preview Selected File")
     selected_id = st.selectbox(
         "Choose file",
-        df['id'].tolist() if not df.empty else [None],
-        format_func=lambda x: df[df['id'] == x]['original_filename'].iloc[0] if x else "None"
+        df['id'].tolist(),
+        format_func=lambda x: df[df['id'] == x]['original_filename'].iloc[0]
     )
 
     if selected_id:
         row = df[df['id'] == selected_id].iloc[0]
         file_path = row['file_path']
         filename = row['original_filename']
+        is_url = file_path and file_path.startswith(("http://", "https://"))
 
-        st.caption(f"📄 {filename}")
+        st.caption(f"📄 {filename} | Category: {row['file_category']}")
 
-        is_url = file_path and (file_path.startswith("http://") or file_path.startswith("https://"))
-        
-        if is_url:
+        if is_url or (file_path and os.path.exists(file_path)):
             if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
                 st.image(file_path, width="stretch")
             else:
-                st.info(f"📄 {filename} (PDF or other document)")
-        elif file_path and os.path.exists(file_path):
-            if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-                st.image(file_path, width="stretch")
-            else:
-                st.info(f"📄 {filename} (PDF or other document)")
+                st.info(f"📄 Document: {filename}")
         else:
-            st.warning("⚠️ File not found")
+            st.warning("⚠️ File not found on storage (but you can still edit/delete the DB row below)")
 
-        # Download
+        # Download + Delete
         if is_url:
-            st.link_button("📥 Download File", url=file_path, key=f"link_file_{selected_id}")
+            st.link_button("📥 Download", url=file_path, key=f"link_{selected_id}")
         elif file_path and os.path.exists(file_path):
             with open(file_path, "rb") as f:
-                st.download_button("📥 Download File", data=f.read(), file_name=filename, key=f"download_file_{selected_id}")
+                st.download_button("📥 Download", data=f.read(), file_name=filename, key=f"dl_{selected_id}")
 
-        # Delete
-        if st.button("🗑️ Delete File", type="secondary", key=f"delete_{selected_id}"):
+        if st.button("🗑️ Delete File", type="secondary", key=f"del_{selected_id}"):
             delete_receipt_file(file_path)
             conn = get_connection()
             conn.execute("DELETE FROM receipts WHERE id=?", (selected_id,))
             conn.commit()
             conn.close()
-            st.success("✅ File deleted")
+            st.success("File deleted")
             st.rerun()
-
-        if row.get('ocr_text'):
-            st.text_area("OCR Text", row['ocr_text'], height=120, key=f"ocr_{selected_id}")
 
 # ====================== QUICK UPLOAD ======================
 st.subheader("➕ Upload New File")
-uploaded = st.file_uploader("Any file (receipt, permit doc, plan, photo, inspo…)",
+uploaded = st.file_uploader("Any file (receipt, permit, plan, photo, inspo…)", 
                            type=["jpg", "jpeg", "png", "pdf"])
 
 if uploaded:
     file_url = save_uploaded_file(uploaded)
-    st.success("✅ Uploaded!")
+    st.success("✅ Uploaded to storage!")
     current_focus = get_current_focus()
     
     with st.form("quick_file_form"):
-        cat = st.selectbox("Category", 
-                          ["receipt", "permit", "plan", "photo", "contract", "general", "inspo"])  # ← NEW
+        cat = st.selectbox("Category", ["receipt", "permit", "plan", "photo", "contract", "general", "inspo"])
         notes = st.text_area("Notes / Description")
         
         link_options = ["None"]
