@@ -1,6 +1,6 @@
 import streamlit as st
 from datetime import date
-from db.db_utils import get_project_config, get_connection, get_current_focus
+from db.db_utils import get_project_config, get_connection, get_current_focus, is_cloud_mode
 from utils.helpers import save_uploaded_file
 from utils.mobile_css import apply_mobile_optimizations
 
@@ -38,6 +38,13 @@ def render_sidebar():
         st.page_link("pages/09_⚙️_Settings.py",           label="⚙️ Settings",      icon="⚙️")
 
         st.divider()
+
+        # Storage health — warn only when Supabase is missing in cloud mode
+        if is_cloud_mode():
+            _missing = [k for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_BUCKET")
+                        if k not in st.secrets]
+            if _missing:
+                st.warning(f"⚠️ File uploads disabled\nMissing secrets: {', '.join(_missing)}")
 
         if st.button("➕ Quick Log (Photo / Receipt)", type="primary", use_container_width=True):
             quick_log_dialog()

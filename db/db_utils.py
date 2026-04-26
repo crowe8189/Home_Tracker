@@ -193,6 +193,25 @@ def init_db():
         seed_data(conn)
         print(f"✅ Crowe's Nest Build seeded in {DB_MODE} mode!")
 
+    # Cloud: auto-delete orphaned local-path records on every startup.
+    # After a Streamlit Cloud restart the uploads/ folder is wiped, so any
+    # record whose file_path is a local path (not a Supabase https:// URL) is
+    # permanently broken.  Clean them up automatically so ghost files never
+    # appear in Site Diary or All Files Hub.
+    if DB_MODE == "cloud":
+        ghost_row = conn.execute("""
+            SELECT COUNT(*) FROM receipts
+            WHERE file_path IS NULL OR file_path = '' OR file_path NOT LIKE 'http%'
+        """).fetchone()
+        ghost_count = ghost_row[0] if ghost_row else 0
+        if ghost_count:
+            conn.execute("""
+                DELETE FROM receipts
+                WHERE file_path IS NULL OR file_path = '' OR file_path NOT LIKE 'http%'
+            """)
+            conn.commit()
+            print(f"🧹 Auto-cleaned {ghost_count} ghost file record(s) on startup")
+
     conn.close()
 
 

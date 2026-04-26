@@ -24,6 +24,15 @@ def get_supabase_client():
 def save_uploaded_file(uploaded_file):
     """Save file to Supabase (cloud) or local uploads/ (local). Returns URL or path."""
     if is_cloud_mode():
+        missing = [k for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_BUCKET")
+                   if k not in st.secrets]
+        if missing:
+            st.error(
+                f"⚠️ File uploads are not configured. Add the following to your Streamlit Cloud "
+                f"secrets (share.streamlit.io → your app → Settings → Secrets): "
+                f"{', '.join(missing)}"
+            )
+            return None
         try:
             supabase = get_supabase_client()
             bucket = st.secrets.get("SUPABASE_BUCKET", "receipts")
