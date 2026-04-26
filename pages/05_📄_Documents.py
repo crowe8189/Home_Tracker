@@ -17,7 +17,8 @@ with colA:
     search = st.text_input("🔍 Search files (filename, notes, OCR)", "")
 with colB:
     category_filter = st.selectbox("File Category",
-                                   ["All", "receipt", "permit", "plan", "photo", "contract", "general","Inspo"],
+                                   ["All", "receipt", "permit", "plan", "photo", 
+                                    "contract", "general", "inspo"],   # ← NEW
                                    index=0)
 with colC:
     date_filter = st.date_input("Uploaded after", value=None, label_visibility="collapsed")
@@ -67,7 +68,6 @@ else:
 
         st.caption(f"📄 {filename}")
 
-        # Display image or info
         is_url = file_path and (file_path.startswith("http://") or file_path.startswith("https://"))
         
         if is_url:
@@ -83,23 +83,14 @@ else:
         else:
             st.warning("⚠️ File not found")
 
-        # ====================== DOWNLOAD ======================
+        # Download
         if is_url:
-            st.link_button(
-                "📥 Download File",
-                url=file_path,
-                key=f"link_file_{selected_id}"
-            )
+            st.link_button("📥 Download File", url=file_path, key=f"link_file_{selected_id}")
         elif file_path and os.path.exists(file_path):
             with open(file_path, "rb") as f:
-                st.download_button(
-                    "📥 Download File",
-                    data=f.read(),
-                    file_name=filename,
-                    key=f"download_file_{selected_id}"
-                )
+                st.download_button("📥 Download File", data=f.read(), file_name=filename, key=f"download_file_{selected_id}")
 
-        # ====================== DELETE ======================
+        # Delete
         if st.button("🗑️ Delete File", type="secondary", key=f"delete_{selected_id}"):
             delete_receipt_file(file_path)
             conn = get_connection()
@@ -109,13 +100,12 @@ else:
             st.success("✅ File deleted")
             st.rerun()
 
-        # OCR (if available)
         if row.get('ocr_text'):
             st.text_area("OCR Text", row['ocr_text'], height=120, key=f"ocr_{selected_id}")
 
 # ====================== QUICK UPLOAD ======================
 st.subheader("➕ Upload New File")
-uploaded = st.file_uploader("Any file (receipt, permit doc, plan, photo…)",
+uploaded = st.file_uploader("Any file (receipt, permit doc, plan, photo, inspo…)",
                            type=["jpg", "jpeg", "png", "pdf"])
 
 if uploaded:
@@ -124,7 +114,8 @@ if uploaded:
     current_focus = get_current_focus()
     
     with st.form("quick_file_form"):
-        cat = st.selectbox("Category", ["receipt", "permit", "plan", "photo", "contract", "general","Inspo"])
+        cat = st.selectbox("Category", 
+                          ["receipt", "permit", "plan", "photo", "contract", "general", "inspo"])  # ← NEW
         notes = st.text_area("Notes / Description")
         
         link_options = ["None"]
