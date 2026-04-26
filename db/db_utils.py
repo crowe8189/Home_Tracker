@@ -113,6 +113,7 @@ def init_db():
     )""")
 
     # ====================== RECEIPTS TABLE + TURSO-SAFE MIGRATION ======================
+# Receipts
     c.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY,
         file_path TEXT,
@@ -123,14 +124,10 @@ def init_db():
         category TEXT,
         notes TEXT,
         linked_expense_id INTEGER,
-        ocr_text TEXT,
-        file_category TEXT DEFAULT 'receipt',
-        linked_task_id INTEGER,
-        linked_permit_id INTEGER,
-        document_type TEXT
+        ocr_text TEXT
     )""")
 
-    # Force-add any missing columns (works reliably on Turso)
+# ====================== TURSO-SAFE MIGRATION (adds missing columns) ======================
     c.execute("PRAGMA table_info(receipts)")
     existing_cols = {row[1] for row in c.fetchall()}
 
@@ -145,18 +142,12 @@ def init_db():
         if col_name not in existing_cols:
             try:
                 c.execute(f"ALTER TABLE receipts ADD COLUMN {col_name} {col_def}")
-                print(f"✅ Added missing column: {col_name}")
+                print(f"✅ Migrated receipts: added column '{col_name}'")
             except Exception as e:
-                print(f"⚠️ Column {col_name} already exists or migration skipped: {e}")
-
-    # Clean only obvious test/ghost files (keeps your real uploads)
-    test_files = ["newplot.png", "image001.png"]
-    for fname in test_files:
-        c.execute("DELETE FROM receipts WHERE original_filename = ?", (fname,))
-        print(f"🧹 Removed test file row: {fname}")
+                print(f"⚠️ Column '{col_name}' already exists: {e}")
 
     conn.commit()
-    print("✅ Receipts table fully ready (columns + test cleanup)")
+    print("✅ receipts table migration complete (Quick Log + Documents now work)")
 
     c.execute("""CREATE TABLE IF NOT EXISTS permits (
         id INTEGER PRIMARY KEY,
