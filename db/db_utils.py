@@ -224,23 +224,27 @@ def update_project_config(name, total_budget, start_date, address):
     conn.close()
 
 def get_current_focus():
-    """Returns current task + permit for Quick Log sidebar"""
+    """Returns current/next task + permit for Quick Log sidebar + Dashboard alerts"""
     conn = get_connection()
+    
+    # Current task (with due_date for overdue/current display)
     task = conn.execute("""
-        SELECT id, title 
+        SELECT id, title, due_date, planned_start, status
         FROM tasks 
         WHERE status != 'completed' 
         ORDER BY planned_start LIMIT 1
     """).fetchone()
     
+    # Next pending permit
     permit = conn.execute("""
-        SELECT id, name 
+        SELECT id, name, required_date
         FROM permits 
         WHERE status = 'pending' 
         ORDER BY required_date LIMIT 1
     """).fetchone()
     
     conn.close()
+    
     return {
         "task": dict(task) if task else None,
         "permit": dict(permit) if permit else None
