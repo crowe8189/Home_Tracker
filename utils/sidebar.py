@@ -48,63 +48,62 @@ def render_sidebar():
         
         # Quick Log Button (inside sidebar)
         if st.button("➕ Quick Log (Photo / Receipt)", type="primary", use_container_width=True):
-            st.session_state.show_quick_log = True
+                quick_log_dialog()   # ← This opens the dialog
 
-    # ====================== QUICK LOG DIALOG (MUST BE OUTSIDE SIDEBAR) ======================
-    if st.session_state.get("show_quick_log", False):
-        with st.dialog("Quick Log — On-Site Capture"):
-            st.subheader("📸 Quick Log")
-            current_focus = get_current_focus()
-            
-            col_cam, col_file = st.columns(2)
-            with col_cam:
-                camera_photo = st.camera_input("Take photo now", key="sidebar_cam")
-            with col_file:
-                uploaded = st.file_uploader("Or upload file", 
-                                          type=["jpg","jpeg","png","pdf"], 
-                                          key="sidebar_file")
-            
-            file_to_save = camera_photo if camera_photo is not None else uploaded
-            notes = st.text_area("Notes / Description", height=100)
-            
-            link_options = ["None"]
-            default_index = 0
-            if current_focus.get("task"):
-                link_options.append(f"Current Task: {current_focus['task']['title']}")
-                default_index = 1
-            if current_focus.get("permit"):
-                link_options.append(f"Current Permit: {current_focus['permit']['name']}")
-                if not current_focus.get("task"):
-                    default_index = 1
-            
-            link_choice = st.selectbox("Link to", link_options, index=default_index)
-            
-            task_id = permit_id = None
-            if "Task" in link_choice and current_focus.get("task"):
-                task_id = current_focus["task"]["id"]
-            elif "Permit" in link_choice and current_focus.get("permit"):
-                permit_id = current_focus["permit"]["id"]
-            
-            if st.button("✅ Save & Close", type="primary", use_container_width=True):
-                if file_to_save:
-                    file_url = save_uploaded_file(file_to_save)
-                    conn = get_connection()
-                    conn.execute("""INSERT INTO receipts 
-                        (file_path, original_filename, upload_date, notes, file_category,
-                         linked_task_id, linked_permit_id, document_type)
-                        VALUES (?,?,?,?,?,?,?,?)""",
-                        (file_url, 
-                         getattr(file_to_save, 'name', 'camera_photo.jpg'),
-                         date.today().strftime("%Y-%m-%d"),
-                         notes, "quick_log", task_id, permit_id, "document"))
-                    conn.commit()
-                    conn.close()
-                    st.success("✅ Saved and auto-linked!")
-                    st.session_state.show_quick_log = False
-                    st.rerun()
-                else:
-                    st.warning("Please take a photo or upload a file")
-            
-            if st.button("Cancel"):
-                st.session_state.show_quick_log = False
-                st.rerun()
+# ====================== QUICK LOG DIALOG (PROPER STREAMLIT DIALOG) ======================
+@st.dialog("Quick Log — On-Site Capture")
+def quick_log_dialog():
+    st.subheader("📸 Quick Log")
+    current_focus = get_current_focus()
+    
+    col_cam, col_file = st.columns(2)
+    with col_cam:
+        camera_photo = st.camera_input("Take photo now", key="sidebar_cam")
+    with col_file:
+        uploaded = st.file_uploader("Or upload file", 
+                                  type=["jpg","jpeg","png","pdf"], 
+                                  key="sidebar_file")
+    
+    file_to_save = camera_photo if camera_photo is not None else uploaded
+    notes = st.text_area("Notes / Description", height=100)
+    
+    # Link options
+    link_options = ["None"]
+    default_index = 0
+    if current_focus.get("task"):
+        link_options.append(f"Current Task: {current_focus['task']['title']}")
+        default_index = 1
+    if current_focus.get("permit"):
+        link_options.append(f"Current Permit: {current_focus['permit']['name']}")
+        if not current_focus.get("task"):
+            default_index = 1
+    
+    link_choice = st.selectbox("Link to", link_options, index=default_index)
+    
+    task_id = permit_id = None
+    if "Task" in link_choice and current_focus.get("task"):
+        task_id = current_focus["task"]["id"]
+    elif "Permit" in link_choice and current_focus.get("permit"):
+        permit_id = current_focus["permit"]["id"]
+    
+    if st.button("✅ Save & Close", type="primary", use_container_width=True):
+        if file_to_save:
+            file_url = save_uploaded_file(file_to_save)
+            conn = get_connection()
+            conn.execute("""INSERT INTO receipts 
+                (file_path, original_filename, upload_date, notes, file_category,
+                 linked_task_id, linked_permit_id, document_type)
+                VALUES (?,?,?,?,?,?,?,?)""",
+                (file_url, 
+                 getattr(file_to_save, 'name', 'camera_photo.jpg'),
+                 date.today().strftime("%Y-%m-%d"),
+                 notes, "quick_log", task_id, permit_id, "document"))
+            conn.commit()
+            conn.close()
+            st.success("✅ Saved and auto-linked!")
+            st.rerun()   # closes dialog automatically
+        else:
+            st.warning("Please take a photo or upload a file")
+
+    if st.button("Cancel"):
+        st.rerun()

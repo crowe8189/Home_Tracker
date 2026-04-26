@@ -112,6 +112,7 @@ def init_db():
         FOREIGN KEY(prerequisite_id) REFERENCES tasks(id)
     )""")
 
+    # Receipts (updated for Quick Log + All Files Hub)
     c.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY,
         file_path TEXT,
@@ -122,13 +123,26 @@ def init_db():
         category TEXT,
         notes TEXT,
         linked_expense_id INTEGER,
+        ocr_text TEXT,
+        -- NEW COLUMNS for Quick Log / Documents Hub
+        file_category TEXT DEFAULT 'receipt',
         linked_task_id INTEGER,
         linked_permit_id INTEGER,
-        file_category TEXT DEFAULT 'general',
-        document_type TEXT,
-        ocr_text TEXT,
-        tags TEXT
+        document_type TEXT
     )""")
+    new_cols = [
+    ("file_category", "TEXT DEFAULT 'receipt'"),
+    ("linked_task_id", "INTEGER"),
+    ("linked_permit_id", "INTEGER"),
+    ("document_type", "TEXT")
+    ]
+
+    for col_name, col_def in new_cols:
+        if col_name not in existing_cols:
+            c.execute(f"ALTER TABLE receipts ADD COLUMN {col_name} {col_def}")
+            print(f"✅ Migrated receipts table: added {col_name}")
+
+    conn.commit()
 
     c.execute("""CREATE TABLE IF NOT EXISTS permits (
         id INTEGER PRIMARY KEY,
@@ -202,28 +216,22 @@ def update_project_config(name, total_budget, start_date, address):
     conn.close()
 
 def get_current_focus():
-    """Returns current task and pending permit for smart auto-linking everywhere."""
+    """Returns current task/permit for Quick Log linking"""
     conn = get_connection()
-    
-    # Current earliest non-completed task
-    task_row = conn.execute("""
-        SELECT id, title, due_date 
-        FROM tasks 
+    task = conn.execute("""
+        SELECT id, title FROM tasks 
         WHERE status != 'completed' 
-        ORDER BY planned_start ASC LIMIT 1
+        ORDER BY planned_start LIMIT 1
     """).fetchone()
     
-    # Current pending permit (earliest due)
-    permit_row = conn.execute("""
-        SELECT id, name, required_date 
-        FROM permits 
+    permit = conn.execute("""
+        SELECT id, name FROM permits 
         WHERE status = 'pending' 
-        ORDER BY required_date ASC LIMIT 1
+        ORDER BY required_date LIMIT 1
     """).fetchone()
     
     conn.close()
-    
     return {
-        "task": row_to_dict(task_row) if task_row else None,
-        "permit": row_to_dict(permit_row) if permit_row else None
+        "task": dict(task) if task else None,
+        "permit": dict(permit) if permit else None
     }
