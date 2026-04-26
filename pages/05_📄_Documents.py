@@ -67,70 +67,51 @@ else:
 
         st.caption(f"📄 {filename}")
 
-        # More forgiving check for Supabase URLs or local files
+        # Display image or info
         is_url = file_path and (file_path.startswith("http://") or file_path.startswith("https://"))
         
         if is_url:
             if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-                st.image(file_path, use_container_width=True)
+                st.image(file_path, width="stretch")
             else:
                 st.info(f"📄 {filename} (PDF or other document)")
         elif file_path and os.path.exists(file_path):
             if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-                st.image(file_path, use_container_width=True)
+                st.image(file_path, width="stretch")
             else:
                 st.info(f"📄 {filename} (PDF or other document)")
         else:
             st.warning("⚠️ File not found")
 
-        # Download
+        # ====================== DOWNLOAD ======================
         if is_url:
-            st.link_button("📥 Download File", url=file_path, use_container_width=True)
-        elif file_path and os.path.exists(file_path):
-            with open(file_path, "rb") as f:
-                st.download_button("📥 Download File", data=f.read(), file_name=filename, use_container_width=True)
-        else:
-            st.warning("⚠️ Cannot download - file not found")
-
-        # Delete
-        if st.button("🗑️ Delete File", type="secondary"):
-            delete_receipt_file(file_path)
-            conn = get_connection()
-            conn.execute("DELETE FROM receipts WHERE id=?", (selected_id,))
-            conn.commit()
-            conn.close()
-            st.success("File deleted")
-            st.rerun()
-
-        if row.get('ocr_text'):
-            st.text_area("OCR Text", row['ocr_text'], height=120)
-
-# Download - works for both Supabase URLs and local files
-        if file_path and (file_path.startswith("http://") or file_path.startswith("https://")):
-            st.link_button("📥 Download File", url=file_path, use_container_width=True)
+            st.link_button(
+                "📥 Download File",
+                url=file_path,
+                key=f"link_file_{selected_id}"
+            )
         elif file_path and os.path.exists(file_path):
             with open(file_path, "rb") as f:
                 st.download_button(
                     "📥 Download File",
                     data=f.read(),
                     file_name=filename,
-                    use_container_width=True
+                    key=f"download_file_{selected_id}"
                 )
-        else:
-            st.warning("⚠️ Cannot download - file not found")
 
-        # Delete
-        if st.button("🗑️ Delete File", type="secondary"):
+        # ====================== DELETE ======================
+        if st.button("🗑️ Delete File", type="secondary", key=f"delete_{selected_id}"):
             delete_receipt_file(file_path)
             conn = get_connection()
             conn.execute("DELETE FROM receipts WHERE id=?", (selected_id,))
             conn.commit()
             conn.close()
-            st.success("File deleted")
+            st.success("✅ File deleted")
             st.rerun()
 
+        # OCR (if available)
         if row.get('ocr_text'):
-            st.text_area("OCR Text", row['ocr_text'], height=120)
+            st.text_area("OCR Text", row['ocr_text'], height=120, key=f"ocr_{selected_id}")
 
 # ====================== QUICK UPLOAD ======================
 st.subheader("➕ Upload New File")
@@ -140,13 +121,12 @@ uploaded = st.file_uploader("Any file (receipt, permit doc, plan, photo…)",
 if uploaded:
     file_url = save_uploaded_file(uploaded)
     st.success("✅ Uploaded!")
-
     current_focus = get_current_focus()
-
+    
     with st.form("quick_file_form"):
         cat = st.selectbox("Category", ["receipt", "permit", "plan", "photo", "contract", "general"])
         notes = st.text_area("Notes / Description")
-
+        
         link_options = ["None"]
         default_index = 0
         if current_focus.get("task"):
@@ -156,15 +136,15 @@ if uploaded:
             link_options.append(f"Current Permit: {current_focus['permit']['name']}")
             if not current_focus.get("task"):
                 default_index = 1
-
+        
         link_to = st.selectbox("Link to", link_options, index=default_index)
-
+        
         task_id = permit_id = None
         if "Task" in link_to and current_focus.get("task"):
             task_id = current_focus["task"]["id"]
         elif "Permit" in link_to and current_focus.get("permit"):
             permit_id = current_focus["permit"]["id"]
-
+        
         submitted = st.form_submit_button("Save File")
         if submitted:
             conn = get_connection()
