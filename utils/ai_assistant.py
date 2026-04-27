@@ -18,11 +18,11 @@ PHOTO_TAGS = [
 
 
 def _get_model():
-    """Return a configured Gemini 1.5 Flash model, or None if unavailable."""
+    """Return a configured Gemini 2.0 Flash model, or None if unavailable."""
     if not _GENAI_OK or "GEMINI_API_KEY" not in st.secrets:
         return None
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    return genai.GenerativeModel("gemini-1.5-flash")
+    return genai.GenerativeModel("gemini-2.0-flash")
 
 
 def classify_photo_url(image_url: str):
