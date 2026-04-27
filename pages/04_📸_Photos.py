@@ -143,10 +143,10 @@ with tab_phase:
         # ── AI auto-tag backfill ──────────────────────────────────────────
         with st.expander("🤖 AI Auto-Tag", expanded=False):
             needs_tag = photos[photos["auto_tag"].isna() | (photos["auto_tag"] == "")]
-            if "ANTHROPIC_API_KEY" not in st.secrets:
+            if "GEMINI_API_KEY" not in st.secrets:
                 st.info(
-                    "Add **ANTHROPIC_API_KEY** to Streamlit Cloud Secrets to enable AI photo tagging. "
-                    "Claude Haiku will classify each photo into a construction category."
+                    "Add **GEMINI_API_KEY** to Streamlit Cloud Secrets to enable AI photo tagging. "
+                    "Gemini 1.5 Flash will classify each photo into a construction category."
                 )
             elif needs_tag.empty:
                 st.success("✅ All photos have an AI tag.")
