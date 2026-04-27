@@ -193,24 +193,32 @@ def init_db():
         seed_data(conn)
         print(f"✅ Crowe's Nest Build seeded in {DB_MODE} mode!")
 
-    # Cloud: auto-delete orphaned local-path records on every startup.
-    # After a Streamlit Cloud restart the uploads/ folder is wiped, so any
-    # record whose file_path is a local path (not a Supabase https:// URL) is
-    # permanently broken.  Clean them up automatically so ghost files never
-    # appear in Site Diary or All Files Hub.
+    # Cloud: prune orphaned receipts on every cold start. Two passes:
+    #   1. Local-path orphans  — file_path is NULL/empty/non-http (uploads/ is wiped on restart).
+    #   2. Bucket-mismatch orphans — file_path looks like a Supabase URL but the file
+    #      no longer exists in the bucket. These are the "ghosts that come back" because
+    #      the URL pattern alone can't tell them apart from valid records.
     if DB_MODE == "cloud":
-        ghost_row = conn.execute("""
+        local_row = conn.execute("""
             SELECT COUNT(*) FROM receipts
             WHERE file_path IS NULL OR file_path = '' OR file_path NOT LIKE 'http%'
         """).fetchone()
-        ghost_count = ghost_row[0] if ghost_row else 0
-        if ghost_count:
+        local_count = local_row[0] if local_row else 0
+        if local_count:
             conn.execute("""
                 DELETE FROM receipts
                 WHERE file_path IS NULL OR file_path = '' OR file_path NOT LIKE 'http%'
             """)
             conn.commit()
-            print(f"🧹 Auto-cleaned {ghost_count} ghost file record(s) on startup")
+            print(f"🧹 Auto-cleaned {local_count} local-path orphan(s)")
+
+        try:
+            from utils.helpers import reconcile_supabase_with_db
+            bucket_pruned = reconcile_supabase_with_db(conn)
+            if bucket_pruned:
+                print(f"🧹 Pruned {bucket_pruned} bucket-mismatch ghost(s)")
+        except Exception as e:
+            print(f"⚠️ Skipping bucket reconciliation: {e}")
 
     conn.close()
 

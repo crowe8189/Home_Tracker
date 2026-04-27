@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from urllib.parse import urlsplit, unquote
 from PIL import Image
 import pandas as pd
 import streamlit as st
@@ -7,6 +8,25 @@ import streamlit as st
 
 def is_cloud_mode():
     return "TURSO_URL" in st.secrets and "TURSO_AUTH_TOKEN" in st.secrets
+
+
+def _supabase_object_path_from_url(file_url: str, bucket: str) -> str | None:
+    """Extract the object path (e.g. 'receipts/20260424_x.jpg') from a public URL.
+
+    Returns None if the URL doesn't belong to this bucket. Strips query string
+    and fragment, decodes percent-encoding.
+    """
+    if not file_url or not bucket:
+        return None
+    marker = f"/storage/v1/object/public/{bucket}/"
+    parts = urlsplit(file_url)
+    clean = f"{parts.scheme}://{parts.netloc}{parts.path}"
+    if marker not in clean:
+        return None
+    tail = clean.split(marker, 1)[1]
+    if not tail:
+        return None
+    return unquote(tail)
 
 
 # ====================== SUPABASE CLIENT ======================
@@ -58,28 +78,99 @@ def save_uploaded_file(uploaded_file):
 
 
 def delete_receipt_file(file_url: str) -> bool:
-    """Delete file from Supabase (cloud) or local filesystem (local)."""
+    """Delete the underlying file from Supabase (cloud) or local disk (local).
+
+    Returns True only when the storage backend confirms the file was removed.
+    Returns False on any of: empty URL, non-matching bucket, missing file,
+    Supabase reporting an empty result, or any exception.
+    """
     if not file_url:
         return False
 
     if is_cloud_mode() and "supabase.co" in str(file_url):
         try:
-            supabase = get_supabase_client()
             bucket = st.secrets.get("SUPABASE_BUCKET", "receipts")
-            marker = f"/storage/v1/object/public/{bucket}/"
-            if marker in file_url:
-                object_path = file_url.split(marker)[-1]
-                supabase.storage.from_(bucket).remove([object_path])
-            return True
+            object_path = _supabase_object_path_from_url(file_url, bucket)
+            if not object_path:
+                return False
+
+            supabase = get_supabase_client()
+            response = supabase.storage.from_(bucket).remove([object_path])
+
+            # supabase-py v2 returns a list of removed FileObject dicts.
+            if isinstance(response, list):
+                return len(response) > 0
+            # Some client versions wrap the result as {"data": [...], "error": ...}.
+            if isinstance(response, dict):
+                err = response.get("error")
+                data = response.get("data") or []
+                return bool(data) and not err
+            return False
         except Exception:
             return False
-    elif not is_cloud_mode() and os.path.exists(file_url):
-        try:
-            os.remove(file_url)
-            return True
-        except Exception:
-            return False
+
+    if not is_cloud_mode():
+        if file_url and os.path.exists(file_url):
+            try:
+                os.remove(file_url)
+                return True
+            except Exception:
+                return False
+        return False
+
     return False
+
+
+def reconcile_supabase_with_db(conn) -> int:
+    """Cloud only: list bucket objects and delete DB rows whose Supabase file is gone.
+
+    Returns the number of ghost rows pruned. Safely no-ops (returns 0) when
+    Supabase isn't fully configured or any error occurs, so app startup is
+    never blocked by a transient Supabase outage.
+    """
+    if not is_cloud_mode():
+        return 0
+    for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_BUCKET"):
+        if k not in st.secrets:
+            return 0
+
+    try:
+        bucket = st.secrets["SUPABASE_BUCKET"]
+        supabase = get_supabase_client()
+
+        objects = supabase.storage.from_(bucket).list(
+            "receipts", {"limit": 1000, "offset": 0}
+        )
+        if not isinstance(objects, list):
+            return 0
+        valid_paths = {
+            f"receipts/{obj['name']}"
+            for obj in objects
+            if isinstance(obj, dict) and obj.get("name")
+        }
+
+        rows = conn.execute(
+            "SELECT id, file_path FROM receipts WHERE file_path LIKE 'http%'"
+        ).fetchall()
+
+        ghost_ids = []
+        for row in rows:
+            rid = row[0]
+            url = row[1] or ""
+            object_path = _supabase_object_path_from_url(url, bucket)
+            if object_path is None:
+                continue
+            if object_path not in valid_paths:
+                ghost_ids.append(rid)
+
+        for rid in ghost_ids:
+            conn.execute("DELETE FROM receipts WHERE id=?", (int(rid),))
+        if ghost_ids:
+            conn.commit()
+        return len(ghost_ids)
+    except Exception as e:
+        print(f"⚠️ Bucket reconciliation skipped: {e}")
+        return 0
 
 
 def perform_ocr(uploaded_file) -> str:

@@ -189,12 +189,15 @@ for date_val, group in df.groupby(df["upload_date"].dt.date, sort=False):
                             )
                 with col_del:
                     if st.button("🗑️", key=f"del_{row['id']}"):
-                        delete_receipt_file(filepath)
+                        bucket_ok = delete_receipt_file(filepath)
                         conn = get_connection()
                         conn.execute("DELETE FROM receipts WHERE id=?", (int(row["id"]),))
                         conn.commit()
                         conn.close()
-                        st.success("✅ Deleted")
+                        if bucket_ok:
+                            st.success("✅ Deleted")
+                        else:
+                            st.warning("✅ Removed from diary — file may not have been in bucket")
                         st.rerun()
 
 st.caption("📖 Site Diary • Photos and Quick Log captures appear here automatically")

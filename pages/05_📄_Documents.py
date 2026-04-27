@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="All Files Hub", layout="wide", page_icon="📁")
 
 from db.db_utils import get_connection, get_current_focus, init_db, read_df, is_cloud_mode
-from utils.helpers import save_uploaded_file, delete_receipt_file
+from utils.helpers import save_uploaded_file, delete_receipt_file, reconcile_supabase_with_db
 from utils.sidebar import render_sidebar
 
 if "db_initialized" not in st.session_state:
@@ -43,27 +43,38 @@ df = read_df("""
 conn.close()
 
 # ====================== CLOUD GHOST CLEANUP ======================
-if is_cloud_mode() and not df.empty:
-    ghost_mask = (
-        df["file_path"].isna() |
-        (df["file_path"] == "") |
-        ~df["file_path"].str.startswith("http", na=True)
-    )
-    ghost_count = ghost_mask.sum()
-    if ghost_count > 0:
-        st.warning(
-            f"⚠️ {ghost_count} record(s) have local file paths that won't load on cloud. "
-            "Use the button below to remove them."
-        )
-        if st.button(f"🧹 Remove {ghost_count} Orphaned Record(s)", type="secondary"):
-            ghost_ids = df[ghost_mask]["id"].tolist()
-            conn = get_connection()
-            for gid in ghost_ids:
-                conn.execute("DELETE FROM receipts WHERE id=?", (int(gid),))
-            conn.commit()
-            conn.close()
-            st.success(f"✅ Removed {ghost_count} orphaned record(s)")
+if is_cloud_mode():
+    col_ref, col_clean = st.columns(2)
+    with col_ref:
+        if st.button("🔄 Refresh from Supabase Bucket", use_container_width=True,
+                     help="Re-lists the Supabase bucket and removes DB rows whose files are gone"):
+            conn_r = get_connection()
+            pruned = reconcile_supabase_with_db(conn_r)
+            conn_r.close()
+            if pruned:
+                st.success(f"✅ Removed {pruned} ghost record(s) not found in bucket")
+            else:
+                st.info("✅ All records match bucket — nothing to clean")
             st.rerun()
+    with col_clean:
+        if not df.empty:
+            ghost_mask = (
+                df["file_path"].isna() |
+                (df["file_path"] == "") |
+                ~df["file_path"].str.startswith("http", na=True)
+            )
+            ghost_count = int(ghost_mask.sum())
+            if ghost_count > 0:
+                if st.button(f"🧹 Remove {ghost_count} Local-Path Record(s)", type="secondary",
+                             use_container_width=True):
+                    ghost_ids = df[ghost_mask]["id"].tolist()
+                    conn = get_connection()
+                    for gid in ghost_ids:
+                        conn.execute("DELETE FROM receipts WHERE id=?", (int(gid),))
+                    conn.commit()
+                    conn.close()
+                    st.success(f"✅ Removed {ghost_count} orphaned record(s)")
+                    st.rerun()
 
 # ====================== APPLY FILTERS ======================
 if not df.empty:
@@ -150,12 +161,15 @@ else:
                     )
         with col_del:
             if st.button("🗑️ Delete File", type="secondary", key=f"del_{selected_id}"):
-                delete_receipt_file(file_path)
+                bucket_ok = delete_receipt_file(file_path)
                 conn = get_connection()
                 conn.execute("DELETE FROM receipts WHERE id=?", (int(selected_id),))
                 conn.commit()
                 conn.close()
-                st.success("✅ File deleted")
+                if bucket_ok:
+                    st.success("✅ File deleted from storage and records")
+                else:
+                    st.warning("✅ Removed from records — file may not have been in storage bucket")
                 st.rerun()
 
         if sel.get("ocr_text"):
