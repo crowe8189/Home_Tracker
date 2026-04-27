@@ -2,12 +2,15 @@ import io
 import streamlit as st
 
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     _GENAI_OK = True
 except ImportError:
     _GENAI_OK = False
 
-from db.db_utils import get_project_config, get_connection
+from db.db_utils import get_connection
+
+MODEL = "gemini-2.0-flash-lite"
 
 # Construction photo categories used for AI classification
 PHOTO_TAGS = [
@@ -17,12 +20,11 @@ PHOTO_TAGS = [
 ]
 
 
-def _get_model():
-    """Return a configured Gemini 1.5 Flash 8B model, or None if unavailable."""
+def _get_client():
+    """Return a google.genai Client, or None if unavailable."""
     if not _GENAI_OK or "GEMINI_API_KEY" not in st.secrets:
         return None
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    return genai.GenerativeModel("gemini-1.5-flash-8b")
+    return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
 
 def classify_photo_url(image_url: str):
@@ -31,30 +33,35 @@ def classify_photo_url(image_url: str):
     Returns one of PHOTO_TAGS, or None if classification fails or Gemini is not configured.
     Non-blocking — callers should handle None gracefully.
     """
-    model = _get_model()
-    if model is None or not image_url or not image_url.startswith("http"):
+    client = _get_client()
+    if client is None or not image_url or not image_url.startswith("http"):
         return None
     try:
         import urllib.request
         from PIL import Image
+
         with urllib.request.urlopen(image_url, timeout=12) as resp:
-            img = Image.open(io.BytesIO(resp.read()))
+            image_bytes = resp.read()
+
+        img = Image.open(io.BytesIO(image_bytes))
         prompt = (
             "You are classifying a home construction site photo. "
             f"Choose exactly one label from this list: {', '.join(PHOTO_TAGS)}. "
             "Reply with only the single label, nothing else."
         )
-        response = model.generate_content([prompt, img])
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[img, prompt],
+        )
         tag = response.text.strip().lower().rstrip(".")
         return tag if tag in PHOTO_TAGS else "other"
     except Exception:
         return None
 
 
-def get_ai_response(user_prompt):
+def get_ai_response(user_prompt: str) -> str:
     """Generate AI response with full project context."""
     conn = get_connection()
-    # fetchone() returns a plain tuple on Turso — use index [0], not key access
     phase_row = conn.execute("""
         SELECT name FROM phases
         WHERE order_num = (
@@ -88,10 +95,17 @@ Master QOL/Future-Proofing List (always reference these):
 
 Answer practically, concisely, with clear next steps, cost-conscious suggestions, and safety warnings."""
 
-    model = _get_model()
-    if model:
+    client = _get_client()
+    if client:
         try:
-            response = model.generate_content(system_prompt + "\n\nUser: " + user_prompt)
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    max_output_tokens=1024,
+                ),
+            )
             return response.text
         except Exception as e:
             return (
@@ -108,7 +122,7 @@ Answer practically, concisely, with clear next steps, cost-conscious suggestions
 
 def ai_chat_interface():
     """Persistent AI chat interface."""
-    st.subheader("🤖 AI Construction Assistant (Gemini 1.5 Flash)")
+    st.subheader("🤖 AI Construction Assistant (Gemini 2.0 Flash Lite)")
     st.caption("Ask anything – phase advice, Do's/Don'ts, risks, next steps, QOL ideas…")
 
     if "GEMINI_API_KEY" not in st.secrets:
