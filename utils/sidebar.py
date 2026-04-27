@@ -14,14 +14,29 @@ def render_sidebar():
 
     with st.sidebar:
         st.title("🐦‍⬛ Crowe's Nest Build")
+
+        if not config:
+            st.error(
+                "❌ Database connection failed.\n\n"
+                "Check that **TURSO_URL** and **TURSO_AUTH_TOKEN** are set correctly "
+                "in Streamlit Cloud → Settings → Secrets. "
+                "Make sure you paste the full token with no truncation."
+            )
+            # Still render nav so user can reach Settings page to diagnose
+            st.page_link("pages/09_⚙️_Settings.py", label="⚙️ Settings", icon="⚙️")
+            return
+
         st.caption(f"📍 {config['address']}\n🗓️ Started {config['start_date']}")
         st.divider()
 
         # Budget snapshot
         st.metric("Total Budget", f"${config['total_budget']:,.0f}")
-        conn = get_connection()
-        spent = conn.execute("SELECT COALESCE(SUM(amount),0) FROM expenses").fetchone()[0]
-        conn.close()
+        try:
+            conn = get_connection()
+            spent = conn.execute("SELECT COALESCE(SUM(amount),0) FROM expenses").fetchone()[0]
+            conn.close()
+        except Exception:
+            spent = 0
         st.metric("Spent", f"${spent:,.0f}", f"Remaining ${config['total_budget'] - spent:,.0f}")
 
         st.divider()
