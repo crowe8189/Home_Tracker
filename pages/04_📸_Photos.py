@@ -143,10 +143,10 @@ with tab_phase:
         # ── AI auto-tag backfill ──────────────────────────────────────────
         with st.expander("🤖 AI Auto-Tag", expanded=False):
             needs_tag = photos[photos["auto_tag"].isna() | (photos["auto_tag"] == "")]
-            if "GEMINI_API_KEY" not in st.secrets:
+            if "GROQ_API_KEY" not in st.secrets:
                 st.info(
-                    "Add **GEMINI_API_KEY** to Streamlit Cloud Secrets to enable AI photo tagging. "
-                    "Gemini 1.5 Flash will classify each photo into a construction category."
+                    "Add **GROQ_API_KEY** to Streamlit Cloud Secrets to enable AI photo tagging. "
+                    "Llama Vision via Groq will classify each photo into a construction category."
                 )
             elif needs_tag.empty:
                 st.success("✅ All photos have an AI tag.")

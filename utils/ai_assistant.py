@@ -1,16 +1,17 @@
 import io
+import base64
 import streamlit as st
 
 try:
-    from google import genai
-    from google.genai import types
-    _GENAI_OK = True
+    from groq import Groq
+    _GROQ_OK = True
 except ImportError:
-    _GENAI_OK = False
+    _GROQ_OK = False
 
 from db.db_utils import get_connection
 
-MODEL = "gemini-2.0-flash-lite"
+CHAT_MODEL   = "llama-3.3-70b-versatile"
+VISION_MODEL = "llama-3.2-11b-vision-preview"
 
 # Construction photo categories used for AI classification
 PHOTO_TAGS = [
@@ -21,16 +22,16 @@ PHOTO_TAGS = [
 
 
 def _get_client():
-    """Return a google.genai Client, or None if unavailable."""
-    if not _GENAI_OK or "GEMINI_API_KEY" not in st.secrets:
+    """Return a Groq client, or None if unavailable."""
+    if not _GROQ_OK or "GROQ_API_KEY" not in st.secrets:
         return None
-    return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+    return Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 
 def classify_photo_url(image_url: str):
-    """Send a Supabase photo URL to Gemini Vision for construction category classification.
+    """Send a Supabase photo URL to Groq Vision for construction category classification.
 
-    Returns one of PHOTO_TAGS, or None if classification fails or Gemini is not configured.
+    Returns one of PHOTO_TAGS, or None if classification fails or API key is absent.
     Non-blocking — callers should handle None gracefully.
     """
     client = _get_client()
@@ -43,17 +44,29 @@ def classify_photo_url(image_url: str):
         with urllib.request.urlopen(image_url, timeout=12) as resp:
             image_bytes = resp.read()
 
-        img = Image.open(io.BytesIO(image_bytes))
-        prompt = (
-            "You are classifying a home construction site photo. "
-            f"Choose exactly one label from this list: {', '.join(PHOTO_TAGS)}. "
-            "Reply with only the single label, nothing else."
+        fmt = Image.open(io.BytesIO(image_bytes)).format or "JPEG"
+        mime = "image/png" if fmt.upper() == "PNG" else "image/jpeg"
+        b64  = base64.standard_b64encode(image_bytes).decode("utf-8")
+
+        response = client.chat.completions.create(
+            model=VISION_MODEL,
+            max_tokens=20,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                    {
+                        "type": "text",
+                        "text": (
+                            "You are classifying a home construction site photo. "
+                            f"Choose exactly one label from this list: {', '.join(PHOTO_TAGS)}. "
+                            "Reply with only the single label, nothing else."
+                        ),
+                    },
+                ],
+            }],
         )
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=[img, prompt],
-        )
-        tag = response.text.strip().lower().rstrip(".")
+        tag = response.choices[0].message.content.strip().lower().rstrip(".")
         return tag if tag in PHOTO_TAGS else "other"
     except Exception:
         return None
@@ -98,18 +111,18 @@ Answer practically, concisely, with clear next steps, cost-conscious suggestions
     client = _get_client()
     if client:
         try:
-            response = client.models.generate_content(
-                model=MODEL,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    max_output_tokens=1024,
-                ),
+            response = client.chat.completions.create(
+                model=CHAT_MODEL,
+                max_tokens=1024,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ],
             )
-            return response.text
+            return response.choices[0].message.content
         except Exception as e:
             return (
-                f"🔌 Gemini error: {e}\n\n"
+                f"🔌 Groq error: {e}\n\n"
                 f"**Fallback:** In phase {current_phase} — finish site prep before foundation. "
                 "Check weather and confirm permits this week!"
             )
@@ -122,13 +135,13 @@ Answer practically, concisely, with clear next steps, cost-conscious suggestions
 
 def ai_chat_interface():
     """Persistent AI chat interface."""
-    st.subheader("🤖 AI Construction Assistant (Gemini 2.0 Flash Lite)")
+    st.subheader("🤖 AI Construction Assistant (Llama 3.3 via Groq)")
     st.caption("Ask anything – phase advice, Do's/Don'ts, risks, next steps, QOL ideas…")
 
-    if "GEMINI_API_KEY" not in st.secrets:
+    if "GROQ_API_KEY" not in st.secrets:
         st.warning(
-            "⚠️ GEMINI_API_KEY not set — responses are mock answers. "
-            "Add your Gemini API key in Streamlit Cloud → Settings → Secrets."
+            "⚠️ GROQ_API_KEY not set — responses are mock answers. "
+            "Add your Groq API key in Streamlit Cloud → Settings → Secrets."
         )
 
     if "ai_messages" not in st.session_state:
