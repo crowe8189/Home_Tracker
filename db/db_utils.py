@@ -53,7 +53,13 @@ def read_df(query, conn, params=None):
     we always extract column names from cursor.description and zip them positionally.
     """
     if DB_MODE == "local":
-        return pd.read_sql(query, conn)
+        if params is None:
+            return pd.read_sql(query, conn)
+        # Use cursor directly so SQLite ? placeholders work with params
+        cursor = conn.execute(query, params)
+        cols = [d[0] for d in cursor.description]
+        rows = cursor.fetchall()
+        return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
     # Cloud / Turso path
     cursor = conn.execute(query) if params is None else conn.execute(query, params)
     rows = cursor.fetchall()

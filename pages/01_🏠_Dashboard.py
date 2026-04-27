@@ -185,7 +185,7 @@ if not recent_photos.empty:
             if fname.endswith((".jpg", ".jpeg", ".png")):
                 st.image(str(row["file_path"]), use_container_width=True)
             st.caption(str(row.get("upload_date", ""))[:10])
-    st.page_link("pages/04_📖_Site_Diary.py", label="📖 See all photos in Site Diary →")
+    st.page_link("pages/04_📸_Photos.py", label="📸 See all photos →")
 else:
     st.caption("No photos yet — tap ➕ Quick Log above to capture your first site photo")
 
