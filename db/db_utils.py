@@ -48,21 +48,32 @@ def row_to_dict(row):
 def read_df(query, conn, params=None):
     """Execute SELECT and return pd.DataFrame — safe for both sqlite3 and libsql/Turso.
 
-    pandas read_sql does not work with libsql connections, so in cloud mode we
-    manually build the DataFrame from cursor results.
+    pandas read_sql does not work with libsql connections. In cloud mode we build
+    the DataFrame manually. libsql rows may be plain tuples (no named access), so
+    we always extract column names from cursor.description and zip them positionally.
     """
     if DB_MODE == "local":
         return pd.read_sql(query, conn)
     # Cloud / Turso path
     cursor = conn.execute(query) if params is None else conn.execute(query, params)
     rows = cursor.fetchall()
+    try:
+        cols = [d[0] for d in cursor.description]
+    except Exception:
+        cols = []
     if not rows:
-        try:
-            cols = [d[0] for d in cursor.description]
-        except Exception:
-            cols = []
         return pd.DataFrame(columns=cols)
-    return pd.DataFrame([row_to_dict(r) for r in rows])
+    # First attempt: row_to_dict (works when rows have _mapping or keys())
+    try:
+        dicts = [row_to_dict(r) for r in rows]
+        if all(d is not None for d in dicts):
+            return pd.DataFrame(dicts)
+    except Exception:
+        pass
+    # Fallback: positional zip using cursor.description column names (plain tuples)
+    if cols:
+        return pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols)
+    return pd.DataFrame(rows)
 
 
 # ====================== INIT DB ======================
@@ -233,34 +244,31 @@ _CONFIG_FALLBACK = {
 
 def get_project_config():
     """Get project config — auto-initializes DB if missing (critical for Streamlit Cloud)."""
-    row = None
-    try:
+    def _fetch():
         conn = get_connection()
-        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
+        df = read_df("SELECT * FROM project_config WHERE id=1", conn)
         conn.close()
+        return df.iloc[0].to_dict() if not df.empty else None
+
+    result = None
+    try:
+        result = _fetch()
     except Exception as e:
-        print(f"⚠️ DB connection error: {e} — running init_db() now...")
+        print(f"⚠️ DB error on first attempt: {e} — running init_db()")
         try:
             init_db()
-            conn = get_connection()
-            row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
-            conn.close()
+            result = _fetch()
         except Exception as e2:
             print(f"⚠️ init_db also failed: {e2}")
 
-    if row is None:
+    if result is None:
         try:
             init_db()
-            conn = get_connection()
-            row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
-            conn.close()
+            result = _fetch()
         except Exception as e3:
             print(f"⚠️ Could not load project_config: {e3}")
 
-    result = row_to_dict(row)
     if result is None:
-        # DB is unreachable — return a safe fallback so the UI doesn't crash.
-        # The sidebar and pages will still render; they just won't have live data.
         st.error(
             "❌ Cannot connect to Turso database. Check that TURSO_URL and "
             "TURSO_AUTH_TOKEN are set correctly in Streamlit Cloud Secrets "
@@ -282,25 +290,24 @@ def update_project_config(name, total_budget, start_date, address):
 
 def get_current_focus():
     """Returns current task + next pending permit for Quick Log and Dashboard."""
-    conn = get_connection()
-
-    task = conn.execute("""
-        SELECT id, title, due_date, planned_start, status
-        FROM tasks
-        WHERE status != 'completed'
-        ORDER BY planned_start LIMIT 1
-    """).fetchone()
-
-    permit = conn.execute("""
-        SELECT id, name, required_date
-        FROM permits
-        WHERE status = 'pending'
-        ORDER BY required_date LIMIT 1
-    """).fetchone()
-
-    conn.close()
-
-    return {
-        "task":   row_to_dict(task),
-        "permit": row_to_dict(permit),
-    }
+    try:
+        conn = get_connection()
+        task_df = read_df("""
+            SELECT id, title, due_date, planned_start, status
+            FROM tasks
+            WHERE status != 'completed'
+            ORDER BY planned_start LIMIT 1
+        """, conn)
+        permit_df = read_df("""
+            SELECT id, name, required_date
+            FROM permits
+            WHERE status = 'pending'
+            ORDER BY required_date LIMIT 1
+        """, conn)
+        conn.close()
+        return {
+            "task":   task_df.iloc[0].to_dict() if not task_df.empty else None,
+            "permit": permit_df.iloc[0].to_dict() if not permit_df.empty else None,
+        }
+    except Exception:
+        return {"task": None, "permit": None}
