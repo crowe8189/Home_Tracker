@@ -1,13 +1,16 @@
 import io
+import base64
 import streamlit as st
 
 try:
-    import google.generativeai as genai
-    _GENAI_OK = True
+    import anthropic
+    _ANTHROPIC_OK = True
 except ImportError:
-    _GENAI_OK = False
+    _ANTHROPIC_OK = False
 
-from db.db_utils import get_project_config, get_connection
+from db.db_utils import get_connection
+
+MODEL = "claude-haiku-4-5-20251001"
 
 # Construction photo categories used for AI classification
 PHOTO_TAGS = [
@@ -17,41 +20,66 @@ PHOTO_TAGS = [
 ]
 
 
-def _get_model():
-    """Return a configured Gemini 1.5 Flash model, or None if unavailable."""
-    if not _GENAI_OK or "GEMINI_API_KEY" not in st.secrets:
+def _get_client():
+    """Return an Anthropic client, or None if unavailable."""
+    if not _ANTHROPIC_OK or "ANTHROPIC_API_KEY" not in st.secrets:
         return None
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    return genai.GenerativeModel("gemini-1.5-flash")
+    return anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
 
 
 def classify_photo_url(image_url: str):
-    """Send a Supabase photo URL to Gemini Vision for construction category classification.
+    """Send a Supabase photo URL to Claude Haiku for construction category classification.
 
-    Returns one of PHOTO_TAGS, or None if classification fails or Gemini is not configured.
+    Returns one of PHOTO_TAGS, or None if classification fails or the API key is absent.
     Non-blocking — callers should handle None gracefully.
     """
-    model = _get_model()
-    if model is None or not image_url or not image_url.startswith("http"):
+    client = _get_client()
+    if client is None or not image_url or not image_url.startswith("http"):
         return None
     try:
         import urllib.request
         from PIL import Image
+
         with urllib.request.urlopen(image_url, timeout=12) as resp:
-            img = Image.open(io.BytesIO(resp.read()))
-        prompt = (
-            "You are classifying a home construction site photo. "
-            f"Choose exactly one label from this list: {', '.join(PHOTO_TAGS)}. "
-            "Reply with only the single label, nothing else."
+            image_bytes = resp.read()
+
+        # Detect format for correct MIME type
+        fmt = Image.open(io.BytesIO(image_bytes)).format or "JPEG"
+        mime_type = "image/png" if fmt.upper() == "PNG" else "image/jpeg"
+        image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
+
+        message = client.messages.create(
+            model=MODEL,
+            max_tokens=20,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": image_data,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "You are classifying a home construction site photo. "
+                            f"Choose exactly one label from this list: {', '.join(PHOTO_TAGS)}. "
+                            "Reply with only the single label, nothing else."
+                        ),
+                    },
+                ],
+            }],
         )
-        response = model.generate_content([prompt, img])
-        tag = response.text.strip().lower().rstrip(".")
+        tag = message.content[0].text.strip().lower().rstrip(".")
         return tag if tag in PHOTO_TAGS else "other"
     except Exception:
         return None
 
 
-def get_ai_response(user_prompt):
+def get_ai_response(user_prompt: str) -> str:
     """Generate AI response with full project context."""
     conn = get_connection()
     # fetchone() returns a plain tuple on Turso — use index [0], not key access
@@ -88,14 +116,19 @@ Master QOL/Future-Proofing List (always reference these):
 
 Answer practically, concisely, with clear next steps, cost-conscious suggestions, and safety warnings."""
 
-    model = _get_model()
-    if model:
+    client = _get_client()
+    if client:
         try:
-            response = model.generate_content(system_prompt + "\n\nUser: " + user_prompt)
-            return response.text
+            message = client.messages.create(
+                model=MODEL,
+                max_tokens=1024,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            return message.content[0].text
         except Exception as e:
             return (
-                f"🔌 Gemini error: {e}\n\n"
+                f"🔌 AI error: {e}\n\n"
                 f"**Fallback:** In phase {current_phase} — finish site prep before foundation. "
                 "Check weather and confirm permits this week!"
             )
@@ -108,13 +141,13 @@ Answer practically, concisely, with clear next steps, cost-conscious suggestions
 
 def ai_chat_interface():
     """Persistent AI chat interface."""
-    st.subheader("🤖 AI Construction Assistant (Gemini 1.5 Flash)")
+    st.subheader("🤖 AI Construction Assistant (Claude Haiku)")
     st.caption("Ask anything – phase advice, Do's/Don'ts, risks, next steps, QOL ideas…")
 
-    if "GEMINI_API_KEY" not in st.secrets:
+    if "ANTHROPIC_API_KEY" not in st.secrets:
         st.warning(
-            "⚠️ GEMINI_API_KEY not set — responses are mock answers. "
-            "Add your Gemini API key in Streamlit Cloud → Settings → Secrets."
+            "⚠️ ANTHROPIC_API_KEY not set — responses are mock answers. "
+            "Add your Anthropic API key in Streamlit Cloud → Settings → Secrets."
         )
 
     if "ai_messages" not in st.session_state:
