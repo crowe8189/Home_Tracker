@@ -223,27 +223,51 @@ def init_db():
     conn.close()
 
 
+_CONFIG_FALLBACK = {
+    "name": "Crowe's Nest Build",
+    "total_budget": 450000.0,
+    "start_date": "2026-04-07",
+    "address": "450 SR 27, Whitwell, TN 37397",
+}
+
+
 def get_project_config():
     """Get project config — auto-initializes DB if missing (critical for Streamlit Cloud)."""
+    row = None
     try:
         conn = get_connection()
         row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
         conn.close()
     except Exception as e:
         print(f"⚠️ DB connection error: {e} — running init_db() now...")
-        init_db()
-        conn = get_connection()
-        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
-        conn.close()
+        try:
+            init_db()
+            conn = get_connection()
+            row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
+            conn.close()
+        except Exception as e2:
+            print(f"⚠️ init_db also failed: {e2}")
 
     if row is None:
-        print("⚠️ No project_config found — running init_db() now...")
-        init_db()
-        conn = get_connection()
-        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
-        conn.close()
+        try:
+            init_db()
+            conn = get_connection()
+            row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
+            conn.close()
+        except Exception as e3:
+            print(f"⚠️ Could not load project_config: {e3}")
 
-    return row_to_dict(row)
+    result = row_to_dict(row)
+    if result is None:
+        # DB is unreachable — return a safe fallback so the UI doesn't crash.
+        # The sidebar and pages will still render; they just won't have live data.
+        st.error(
+            "❌ Cannot connect to Turso database. Check that TURSO_URL and "
+            "TURSO_AUTH_TOKEN are set correctly in Streamlit Cloud Secrets "
+            "(share.streamlit.io → your app → Settings → Secrets)."
+        )
+        return dict(_CONFIG_FALLBACK)
+    return result
 
 
 def update_project_config(name, total_budget, start_date, address):
