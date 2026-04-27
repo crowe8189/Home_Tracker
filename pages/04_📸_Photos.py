@@ -6,6 +6,7 @@ st.set_page_config(page_title="Build Photos", layout="wide", page_icon="📸")
 
 from db.db_utils import get_connection, init_db, read_df, get_current_focus
 from utils.helpers import save_uploaded_file, delete_receipt_file
+from utils.ai_assistant import classify_photo_url
 from utils.sidebar import render_sidebar
 
 if "db_initialized" not in st.session_state:
@@ -37,7 +38,9 @@ def _render_grid(df, key_prefix, cols=3):
                     notes_val = str(photo.get("notes", "") or "")
                     if notes_val:
                         st.caption(notes_val[:80])
-                    st.caption(str(photo.get("upload_date", ""))[:10])
+                    auto_tag  = str(photo.get("auto_tag", "") or "")
+                    date_str  = str(photo.get("upload_date", ""))[:10]
+                    st.caption(f"{date_str}{'  🏷️ ' + auto_tag if auto_tag else ''}")
                     col_dl, col_del = st.columns([3, 1])
                     with col_dl:
                         if fp.startswith("http"):
@@ -112,7 +115,7 @@ with tab_phase:
     photos = read_df("""
         SELECT
             r.id, r.file_path, r.original_filename,
-            r.upload_date, r.notes, r.linked_task_id,
+            r.upload_date, r.notes, r.linked_task_id, r.auto_tag,
             t.title     AS task_title,
             p.name      AS phase_name,
             p.order_num AS phase_order
@@ -137,6 +140,46 @@ with tab_phase:
         tagged   = photos[photos["phase_name"].notna()].copy()
         untagged = photos[photos["phase_name"].isna()].copy()
 
+        # ── AI auto-tag backfill ──────────────────────────────────────────
+        with st.expander("🤖 AI Auto-Tag", expanded=False):
+            needs_tag = photos[photos["auto_tag"].isna() | (photos["auto_tag"] == "")]
+            if "GEMINI_API_KEY" not in st.secrets:
+                st.info(
+                    "Add **GEMINI_API_KEY** to Streamlit Cloud Secrets to enable AI photo tagging. "
+                    "Gemini 1.5 Flash will classify each photo into a construction category."
+                )
+            elif needs_tag.empty:
+                st.success("✅ All photos have an AI tag.")
+            else:
+                st.caption(f"{len(needs_tag)} photo(s) without an AI tag")
+                if st.button("🤖 Auto-Tag All", type="primary", key="autotag_all"):
+                    bar   = st.progress(0, text="Classifying…")
+                    total = len(needs_tag)
+                    for i, (_, photo) in enumerate(needs_tag.iterrows()):
+                        tag = classify_photo_url(str(photo["file_path"]))
+                        if tag:
+                            c_tag = get_connection()
+                            c_tag.execute(
+                                "UPDATE receipts SET auto_tag=? WHERE id=?",
+                                (tag, int(photo["id"])),
+                            )
+                            c_tag.commit()
+                            c_tag.close()
+                        bar.progress((i + 1) / total, text=f"Tagged {i + 1}/{total}…")
+                    st.success("✅ Done!")
+                    st.rerun()
+
+        # ── Filter chips by AI tag ────────────────────────────────────────
+        available_tags = sorted(t for t in photos["auto_tag"].dropna().unique() if t)
+        active_tags: list = []
+        if available_tags:
+            active_tags = st.multiselect(
+                "🏷️ Filter by AI tag", available_tags, key="phase_tag_filter"
+            )
+            if active_tags:
+                tagged   = tagged[tagged["auto_tag"].isin(active_tags)]
+                untagged = untagged[untagged["auto_tag"].isin(active_tags)]
+
         # Render one section per phase, in phase order
         if not tagged.empty:
             phase_order = (
@@ -148,9 +191,9 @@ with tab_phase:
                 grp = tagged[tagged["phase_name"] == pr["phase_name"]]
                 st.subheader(f"🏗️ {pr['phase_name']}  ({len(grp)})")
                 _render_grid(grp.reset_index(drop=True),
-                             key_prefix=f"ph_{pr['phase_name'].replace(' ','_')}")
+                             key_prefix=f"ph_{pr['phase_name'].replace(' ', '_')}")
 
-        # Untagged section with inline tag-backfill
+        # Untagged section with inline task-backfill
         if not untagged.empty:
             with st.expander(
                 f"📎 Untagged — {len(untagged)} photo(s) (tap Tag to assign)", expanded=True
@@ -182,7 +225,9 @@ with tab_phase:
                                                  use_container_width=True):
                                         if sel != "(skip)":
                                             new_tid = int(
-                                                all_tasks.iloc[task_opts_bf.index(sel) - 1]["id"]
+                                                all_tasks.iloc[
+                                                    task_opts_bf.index(sel) - 1
+                                                ]["id"]
                                             )
                                             c3 = get_connection()
                                             c3.execute(
@@ -207,7 +252,7 @@ with tab_phase:
 with tab_timeline:
     conn = get_connection()
     tl_df = read_df("""
-        SELECT id, file_path, original_filename, upload_date, notes
+        SELECT id, file_path, original_filename, upload_date, notes, auto_tag
         FROM receipts
         WHERE file_category IN ('photo', 'quick_log')
         ORDER BY upload_date DESC
@@ -235,12 +280,12 @@ with tab_search:
     if q.strip():
         conn = get_connection()
         results = read_df("""
-            SELECT id, file_path, original_filename, upload_date, notes
+            SELECT id, file_path, original_filename, upload_date, notes, auto_tag
             FROM receipts
             WHERE file_category IN ('photo', 'quick_log')
-              AND (notes LIKE ? OR original_filename LIKE ?)
+              AND (notes LIKE ? OR original_filename LIKE ? OR auto_tag LIKE ?)
             ORDER BY upload_date DESC
-        """, conn, params=(f"%{q}%", f"%{q}%"))
+        """, conn, params=(f"%{q}%", f"%{q}%", f"%{q}%"))
         conn.close()
 
         if results.empty:
@@ -249,6 +294,6 @@ with tab_search:
             st.caption(f"{len(results)} result(s) for **{q}**")
             _render_grid(results.reset_index(drop=True), key_prefix="srch")
     else:
-        st.caption("Type above to search across photo notes and filenames.")
+        st.caption("Type above to search across photo notes, filenames, and AI tags.")
 
 st.caption("📸 Build Photos")

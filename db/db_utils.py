@@ -192,6 +192,7 @@ def init_db():
         "linked_task_id":   "INTEGER",
         "linked_permit_id": "INTEGER",
         "document_type":    "TEXT",
+        "auto_tag":         "TEXT",
     }
 
     for col_name, col_def in new_columns.items():
