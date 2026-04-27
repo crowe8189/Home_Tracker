@@ -65,7 +65,8 @@ def apply_mobile_optimizations():
             /* Tight layout respecting notch + home indicator */
             .block-container {
                 padding-top:    max(0.75rem, var(--sat)) !important;
-                padding-bottom: max(1.5rem,  var(--sab)) !important;
+                /* Extra bottom clearance so the Quick Log FAB (48px + 72px offset) never covers content */
+                padding-bottom: max(calc(130px + var(--sab)), 2rem) !important;
                 padding-left:   max(0.5rem,  var(--sal)) !important;
                 padding-right:  max(0.5rem,  var(--sar)) !important;
                 max-width: 100% !important;
