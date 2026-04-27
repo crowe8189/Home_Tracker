@@ -1,4 +1,6 @@
 import os
+import urllib.request
+import urllib.error
 from datetime import datetime
 from urllib.parse import urlsplit, unquote
 from PIL import Image
@@ -58,12 +60,49 @@ def save_uploaded_file(uploaded_file):
             bucket = st.secrets.get("SUPABASE_BUCKET", "receipts")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             object_path = f"receipts/{timestamp}_{uploaded_file.name}"
-            supabase.storage.from_(bucket).upload(
+
+            response = supabase.storage.from_(bucket).upload(
                 object_path,
                 uploaded_file.getvalue(),
                 file_options={"content-type": uploaded_file.type},
             )
-            return supabase.storage.from_(bucket).get_public_url(object_path)
+
+            # supabase-py v1 returns an HTTP response object; v2 raises on failure.
+            # Handle v1 explicitly so we don't silently save a URL for a failed upload.
+            if hasattr(response, "status_code") and response.status_code >= 300:
+                try:
+                    detail = response.json()
+                except Exception:
+                    detail = getattr(response, "text", "")
+                st.error(
+                    f"☁️ Supabase upload rejected (HTTP {response.status_code}): {detail}\n\n"
+                    "Check that your Supabase bucket INSERT policy allows uploads. "
+                    "In the Supabase dashboard go to Storage → receipts → Policies "
+                    "and confirm there is a policy granting INSERT to `anon` or `authenticated`."
+                )
+                return None
+
+            public_url = supabase.storage.from_(bucket).get_public_url(object_path)
+
+            # Verify the file is actually reachable — get_public_url() constructs
+            # the URL locally without confirming the file landed in the bucket.
+            try:
+                req = urllib.request.Request(public_url, method="HEAD")
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    if resp.status >= 400:
+                        raise IOError(f"HTTP {resp.status}")
+            except urllib.error.HTTPError as e:
+                st.error(
+                    f"☁️ File uploaded but not accessible (HTTP {e.code}). "
+                    "Your Supabase bucket may be blocking reads, or the file path is wrong. "
+                    "Check Storage → receipts → Policies and ensure SELECT is allowed for `anon`."
+                )
+                return None
+            except Exception:
+                # Network/timeout — don't block the upload on a slow connection check
+                pass
+
+            return public_url
         except Exception as e:
             st.error(f"☁️ Cloud storage upload failed: {e}")
             return None
@@ -171,6 +210,41 @@ def reconcile_supabase_with_db(conn) -> int:
     except Exception as e:
         print(f"⚠️ Bucket reconciliation skipped: {e}")
         return 0
+
+
+def list_bucket_contents() -> list[dict] | None:
+    """Return all objects in the Supabase receipts/ folder, or None on error.
+
+    Used by the Settings diagnostics panel to show what's actually in the bucket.
+    Returns a list of dicts with at least 'name' and 'object_path' keys.
+    """
+    if not is_cloud_mode():
+        return None
+    for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_BUCKET"):
+        if k not in st.secrets:
+            return None
+    try:
+        bucket = st.secrets["SUPABASE_BUCKET"]
+        supabase = get_supabase_client()
+        objects = supabase.storage.from_(bucket).list(
+            "receipts", {"limit": 1000, "offset": 0}
+        )
+        if not isinstance(objects, list):
+            return None
+        result = []
+        for obj in objects:
+            if isinstance(obj, dict) and obj.get("name"):
+                path = f"receipts/{obj['name']}"
+                result.append({
+                    "name": obj["name"],
+                    "object_path": path,
+                    "public_url": supabase.storage.from_(bucket).get_public_url(path),
+                    "size": obj.get("metadata", {}).get("size", "?"),
+                    "created_at": obj.get("created_at", "?"),
+                })
+        return result
+    except Exception as e:
+        return None
 
 
 def perform_ocr(uploaded_file) -> str:

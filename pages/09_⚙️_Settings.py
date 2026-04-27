@@ -10,7 +10,7 @@ from db.db_utils import (
     init_db, read_df, is_cloud_mode, DB_MODE,
 )
 from utils.seeder import seed_data
-from utils.helpers import export_to_csv
+from utils.helpers import export_to_csv, list_bucket_contents, reconcile_supabase_with_db
 from utils.sidebar import render_sidebar
 
 if "db_initialized" not in st.session_state:
@@ -21,7 +21,7 @@ render_sidebar()
 st.title("⚙️ Settings & Project Management")
 st.caption("Edit project details, manage permits, reset data, and create backups")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Project Info", "Permits", "Data Reset & Backup", "About"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Project Info", "Permits", "Data Reset & Backup", "Storage Diagnostics", "About"])
 
 # ====================== TAB 1: Project Info ======================
 with tab1:
@@ -170,8 +170,88 @@ with tab3:
                 except Exception as e:
                     st.error(f"PDF generation failed: {e}")
 
-# ====================== TAB 4: About ======================
+# ====================== TAB 4: Storage Diagnostics ======================
 with tab4:
+    st.subheader("☁️ Storage Diagnostics")
+    st.caption("See exactly what's in your Supabase bucket vs what the database thinks is there")
+
+    if not is_cloud_mode():
+        st.info("Running in local mode — Supabase diagnostics not available.")
+    else:
+        # Secrets check
+        missing_secrets = [k for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_BUCKET")
+                           if k not in st.secrets]
+        if missing_secrets:
+            st.error(f"❌ Missing Streamlit secrets: {', '.join(missing_secrets)}\n\n"
+                     "Go to share.streamlit.io → your app → Settings → Secrets to add them.")
+        else:
+            st.success(f"✅ Supabase secrets present  |  Bucket: `{st.secrets['SUPABASE_BUCKET']}`")
+
+            col_l, col_r = st.columns(2)
+
+            with col_l:
+                st.markdown("**Files in Supabase bucket**")
+                bucket_files = list_bucket_contents()
+                if bucket_files is None:
+                    st.error("Could not list bucket — API call failed. Check credentials and bucket policies.")
+                elif len(bucket_files) == 0:
+                    st.warning("Bucket is empty — no files have been successfully uploaded yet.")
+                else:
+                    st.success(f"{len(bucket_files)} file(s) in bucket")
+                    for f in bucket_files:
+                        st.caption(f"📄 `{f['name']}` ({f['size']} bytes)")
+
+            with col_r:
+                st.markdown("**Receipt rows in database**")
+                conn_d = get_connection()
+                db_rows = read_df("SELECT id, original_filename, file_path FROM receipts", conn_d)
+                conn_d.close()
+                if db_rows.empty:
+                    st.info("Database has 0 receipt rows.")
+                else:
+                    url_rows = db_rows[db_rows["file_path"].str.startswith("http", na=False)]
+                    bad_rows = db_rows[~db_rows["file_path"].str.startswith("http", na=False)]
+                    st.success(f"{len(url_rows)} row(s) with Supabase URLs")
+                    if len(bad_rows) > 0:
+                        st.error(f"{len(bad_rows)} row(s) with local/missing paths (ghosts)")
+                    for _, r in db_rows.iterrows():
+                        icon = "✅" if str(r["file_path"]).startswith("http") else "⚠️"
+                        st.caption(f"{icon} `{r['original_filename']}`")
+
+            st.divider()
+
+            st.markdown("**Reconcile now**")
+            st.caption("Removes DB rows whose file is not found in the bucket. Runs automatically on app startup, but you can trigger it manually here.")
+            if st.button("🔄 Reconcile DB with Bucket", type="primary", use_container_width=True):
+                conn_r = get_connection()
+                pruned = reconcile_supabase_with_db(conn_r)
+                conn_r.close()
+                if pruned > 0:
+                    st.success(f"✅ Removed {pruned} ghost record(s) from database")
+                else:
+                    st.info("✅ Nothing to clean — all DB rows match bucket contents (or bucket listing failed)")
+                st.rerun()
+
+            st.divider()
+
+            st.markdown("**How to fix upload failures**")
+            st.markdown("""
+If the bucket is empty but you've uploaded files, your Supabase INSERT policy is likely blocking anonymous writes.
+
+**Fix in Supabase dashboard:**
+1. Storage → Buckets → `receipts` → Policies
+2. Check for an INSERT policy. If none exists, create one:
+   - Policy name: `Allow public uploads`
+   - Allowed operation: INSERT
+   - Target roles: `anon` and `authenticated`
+   - Policy definition: `true` (allow all)
+3. Also confirm there is a SELECT policy for `anon` so uploaded files are publicly readable.
+
+After fixing the policies, try uploading a test photo from Site Diary. If it appears in the bucket in the Supabase dashboard, uploads are working.
+""")
+
+# ====================== TAB 5: About ======================
+with tab5:
     st.subheader("About Crowe's Nest Build")
     st.markdown(f"""
     **Home construction manager for the Crowe family**
