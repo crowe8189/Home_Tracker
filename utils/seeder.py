@@ -1,6 +1,14 @@
 def seed_data(conn):
     c = conn.cursor()
 
+    # Wipe all seeded tables first — makes re-runs fully idempotent.
+    # Order matters: child tables before parents (foreign keys).
+    # receipts and expenses are user data — never wiped here.
+    for tbl in ("task_dependencies", "tasks", "permits",
+                "qol_ideas", "budget_categories", "phases"):
+        c.execute(f"DELETE FROM {tbl}")
+    conn.commit()
+
     # === PROJECT CONFIG ===
     c.execute("""INSERT OR REPLACE INTO project_config
                  (id, name, total_budget, start_date, address)
@@ -24,104 +32,103 @@ def seed_data(conn):
         ("Siding & Exterior Cladding",                 18000,  ""),
     ]
     c.executemany(
-        "INSERT OR REPLACE INTO budget_categories (name, planned_amount, notes) VALUES (?,?,?)",
+        "INSERT INTO budget_categories (name, planned_amount, notes) VALUES (?,?,?)",
         categories,
     )
 
-    # === PHASES ===
+    # === PHASES — explicit IDs so task phase_id refs are stable ===
     phases = [
-        ("1. Site Preparation",          1,  "Clearing, grading, temporary utilities"),
-        ("2. Foundation",                2,  "Footings, block foundation, concrete slabs"),
-        ("3. Framing",                   3,  "Walls, roof trusses, sheathing"),
-        ("4. Rough-ins",                 4,  "Plumbing, electrical, HVAC"),
-        ("5. Roofing",                   5,  "Underlayment, shingles, flashing"),
-        ("6. Exterior Finishes",         6,  "Siding, windows, doors, gutters"),
-        ("7. Insulation & Drywall",      7,  "Insulation, hang, tape, mud"),
-        ("8. Interior Finishes",         8,  "Cabinets, countertops, tile, flooring, trim, paint"),
-        ("9. Fixtures & Appliances",     9,  "Lighting, plumbing fixtures, appliances"),
-        ("10. Landscaping & Punch List", 10, "Final grading, driveway, cleanup"),
+        (1,  "1. Site Preparation",          1,  "Clearing, grading, temporary utilities"),
+        (2,  "2. Foundation",                2,  "Footings, block foundation, concrete slabs"),
+        (3,  "3. Framing",                   3,  "Walls, roof trusses, sheathing"),
+        (4,  "4. Rough-ins",                 4,  "Plumbing, electrical, HVAC"),
+        (5,  "5. Roofing",                   5,  "Underlayment, shingles, flashing"),
+        (6,  "6. Exterior Finishes",         6,  "Siding, windows, doors, gutters"),
+        (7,  "7. Insulation & Drywall",      7,  "Insulation, hang, tape, mud"),
+        (8,  "8. Interior Finishes",         8,  "Cabinets, countertops, tile, flooring, trim, paint"),
+        (9,  "9. Fixtures & Appliances",     9,  "Lighting, plumbing fixtures, appliances"),
+        (10, "10. Landscaping & Punch List", 10, "Final grading, driveway, cleanup"),
     ]
     c.executemany(
-        "INSERT OR REPLACE INTO phases (name, order_num, description) VALUES (?,?,?)",
+        "INSERT INTO phases (id, name, order_num, description) VALUES (?,?,?,?)",
         phases,
     )
 
-    # === TASKS ===
-    # (phase_id, title, description, planned_start, planned_end, due_date, status, completed_date, notes)
+    # === TASKS — explicit IDs so dependency table is always correct ===
+    # (id, phase_id, title, description, planned_start, planned_end, due_date,
+    #  status, completed_date, notes)
     tasks_data = [
         # ── Site Preparation (phase 1) — completed ─────────────────────────
-        (1, "Complete site clearing, grading, erosion control, and temporary utilities",
+        (1,  1, "Complete site clearing, grading, erosion control, and temporary utilities",
          "", "2026-04-07", "2026-04-17", "2026-04-18", "completed", "2026-04-17", ""),
-        (1, "Install temporary power, water, and portapotty",
+        (2,  1, "Install temporary power, water, and portapotty",
          "", "2026-04-10", "2026-04-19", "2026-04-20", "completed", "2026-04-19", ""),
 
         # ── Foundation (phase 2) ───────────────────────────────────────────
-        (2, "Dig footings, install rebar, and termite treatment",
+        (3,  2, "Dig footings, install rebar, and termite treatment",
          "", "2026-04-20", "2026-04-21", "2026-04-22", "completed", "2026-04-21", ""),
-        (2, "Pour block foundation",
+        (4,  2, "Pour block foundation",
          "", "2026-04-22", "2026-04-24", "2026-04-25", "completed", "2026-04-24", ""),
-        (2, "Pour garage concrete slab",
+        (5,  2, "Pour garage concrete slab",
          "", "2026-04-25", "2026-04-26", "2026-04-27", "completed", "2026-04-26", ""),
-        (2, "Pour porch concrete",
+        (6,  2, "Pour porch concrete",
          "", "2026-04-26", "2026-04-27", "2026-04-28", "completed", "2026-04-27", ""),
-        (2, "Waterproof block foundation (backside)",
+        (7,  2, "Waterproof block foundation (backside)",
          "", "2026-04-28", "2026-05-05", "2026-05-10", "not_started", None, ""),
 
         # ── Framing (phase 3) ─────────────────────────────────────────────
-        (3, "Complete structural framing and roof trusses",
+        (8,  3, "Complete structural framing and roof trusses",
          "", "2026-05-01", "2026-06-15", "2026-06-20", "not_started", None, ""),
 
         # ── Rough-ins (phase 4) ───────────────────────────────────────────
-        (4, "Rough plumbing",
+        (9,  4, "Rough plumbing",
          "", "2026-06-15", "2026-07-01", "2026-07-05", "not_started", None, ""),
-        (4, "Rough electrical",
+        (10, 4, "Rough electrical",
          "", "2026-06-20", "2026-07-15", "2026-07-20", "not_started", None, ""),
-        (4, "Rough HVAC",
+        (11, 4, "Rough HVAC",
          "", "2026-06-25", "2026-07-31", "2026-08-05", "not_started", None, ""),
 
         # ── Roofing (phase 5) ─────────────────────────────────────────────
-        (5, "Install roofing, underlayment, shingles, and flashing",
+        (12, 5, "Install roofing, underlayment, shingles, and flashing",
          "", "2026-07-15", "2026-08-15", "2026-08-20", "not_started", None, ""),
 
         # ── Exterior Finishes (phase 6) ───────────────────────────────────
-        (6, "Install siding",
+        (13, 6, "Install siding",
          "", "2026-08-15", "2026-09-01", "2026-09-05", "not_started", None, ""),
-        (6, "Install windows, exterior doors, and gutters",
+        (14, 6, "Install windows, exterior doors, and gutters",
          "", "2026-08-20", "2026-09-15", "2026-09-20", "not_started", None, ""),
 
         # ── Insulation & Drywall (phase 7) ────────────────────────────────
-        (7, "Install insulation and hang/tape drywall",
+        (15, 7, "Install insulation and hang/tape drywall",
          "", "2026-09-15", "2026-10-15", "2026-10-20", "not_started", None, ""),
 
         # ── Interior Finishes (phase 8) ───────────────────────────────────
-        (8, "Install cabinets and interior doors",
+        (16, 8, "Install cabinets and interior doors",
          "", "2026-10-15", "2026-10-25", "2026-10-30", "not_started", None, ""),
-        (8, "Install countertops",
+        (17, 8, "Install countertops",
          "", "2026-10-25", "2026-11-01", "2026-11-05", "not_started", None, ""),
-        (8, "Tile showers and bathrooms",
+        (18, 8, "Tile showers and bathrooms",
          "", "2026-10-20", "2026-11-05", "2026-11-10", "not_started", None, ""),
-        (8, "Install flooring",
+        (19, 8, "Install flooring",
          "", "2026-11-01", "2026-11-15", "2026-11-20", "not_started", None, ""),
-        (8, "Install trim",
+        (20, 8, "Install trim",
          "", "2026-11-10", "2026-11-20", "2026-11-25", "not_started", None, ""),
-        (8, "Paint",
+        (21, 8, "Paint",
          "", "2026-11-15", "2026-11-30", "2026-12-05", "not_started", None, ""),
 
         # ── Fixtures & Appliances (phase 9) ───────────────────────────────
-        (9, "Install fixtures, lighting, and appliances",
+        (22, 9, "Install fixtures, lighting, and appliances",
          "", "2026-11-15", "2026-12-01", "2026-12-05", "not_started", None, ""),
 
         # ── Landscaping & Punch List (phase 10) ───────────────────────────
-        (10, "Final grading, driveway, landscaping, and punch list",
+        (23, 10, "Final grading, driveway, landscaping, and punch list",
          "", "2026-12-01", "2026-12-20", "2026-12-31", "not_started", None, ""),
     ]
-    c.executemany("""INSERT OR REPLACE INTO tasks
-        (phase_id, title, description, planned_start, planned_end, due_date,
+    c.executemany("""INSERT INTO tasks
+        (id, phase_id, title, description, planned_start, planned_end, due_date,
          status, completed_date, notes)
-        VALUES (?,?,?,?,?,?,?,?,?)""", tasks_data)
+        VALUES (?,?,?,?,?,?,?,?,?,?)""", tasks_data)
 
-    # Task IDs 1–23 auto-assigned in insert order above.
-    # Sequential cross-phase dependencies + Interior Finishes ordering.
     deps = [
         (8,  7),   # Framing after foundation waterproofing
         (12, 8),   # Roofing after framing
@@ -134,7 +141,7 @@ def seed_data(conn):
         (23, 22),  # Landscaping after fixtures
     ]
     c.executemany(
-        "INSERT OR REPLACE INTO task_dependencies (task_id, prerequisite_id) VALUES (?,?)",
+        "INSERT INTO task_dependencies (task_id, prerequisite_id) VALUES (?,?)",
         deps,
     )
 
@@ -165,12 +172,11 @@ def seed_data(conn):
          "Full-extension soft-close drawer bases in ALL lower cabinets",
          900, "planned", None, None, ""),
     ]
-    c.executemany("""INSERT OR REPLACE INTO qol_ideas
+    c.executemany("""INSERT INTO qol_ideas
         (category, description, estimated_cost, status, linked_phase_id, linked_task_id, notes)
         VALUES (?,?,?,?,?,?,?)""", qol_data)
 
     # === PERMITS ===
-    c.execute("DELETE FROM permits")
     permits_data = [
         ("Septic System Permit",      "approved", "2026-04-14", "2026-04-15",
          "TDEC approved — soil test passed", None),
