@@ -10,7 +10,11 @@
       "Bash(python -m py_compile \"pages/04_📸_Photos.py\")",
       "Bash(python -m py_compile \"pages/10_🌿_Inspo_Board.py\")",
       "Bash(python -m py_compile utils/sidebar.py)",
-      "Bash(python -m py_compile db/db_utils.py)"
+      "Bash(python -m py_compile db/db_utils.py)",
+      "Bash(python -m py_compile utils/ai_assistant.py)",
+      "Bash(pip install *)",
+      "Bash(git revert *)",
+      "Bash(git commit *)"
     ]
   }
 }

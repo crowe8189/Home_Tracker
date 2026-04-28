@@ -211,6 +211,27 @@ Size: 0.0 KB
 
 
 ================================================================================
+FILE: list_gemini_models.py
+Path: C:\Python Projects\Home_Tracker\list_gemini_models.py
+Size: 0.5 KB
+================================================================================
+
+"""Run this locally to see which Gemini models your API key can access.
+Usage: python list_gemini_models.py
+"""
+import os
+import google.generativeai as genai
+
+api_key = os.environ.get("GEMINI_API_KEY") or input("Paste your GEMINI_API_KEY: ").strip()
+genai.configure(api_key=api_key)
+
+print("\nAvailable models that support generateContent:\n")
+for m in genai.list_models():
+    if "generateContent" in m.supported_generation_methods:
+        print(f"  {m.name}")
+
+
+================================================================================
 FILE: README.md
 Path: C:\Python Projects\Home_Tracker\README.md
 Size: 0.5 KB
@@ -230,6 +251,14 @@ Fully functional: Dashboard, Budget, Gantt Roadmap, Receipts+OCR, AI Assistant (
 Future improvements in the Settings page notes.
 
 ================================================================================
+FILE: replace.txt
+Path: C:\Python Projects\Home_Tracker\replace.txt
+Size: 0.0 KB
+================================================================================
+
+AIzaSyAcgUicJW4SOTTww1xyQlyXv96sFunf2iA==>REDACTED
+
+================================================================================
 FILE: requirements.txt
 Path: C:\Python Projects\Home_Tracker\requirements.txt
 Size: 0.2 KB
@@ -238,7 +267,7 @@ Size: 0.2 KB
 streamlit>=1.38.0
 pandas
 plotly
-google-generativeai
+groq
 Pillow
 # pytesseract          # optional – comment out if you don't want OCR on cloud
 libsql
@@ -247,12 +276,190 @@ fpdf2
 kaleido
 
 ================================================================================
+FILE: test_secrets.py
+Path: C:\Python Projects\Home_Tracker\test_secrets.py
+Size: 5.8 KB
+================================================================================
+
+"""
+Validate all Streamlit secrets before deploying to Streamlit Cloud.
+
+    python test_secrets.py
+
+Reads from .streamlit/secrets.toml (never committed to git).
+No libsql install required — Turso is tested via its HTTP REST API.
+"""
+
+import sys
+import json
+import urllib.request
+import urllib.error
+
+# ── 1. Load secrets.toml ──────────────────────────────────────────────────────
+try:
+    import tomllib                  # Python 3.11+
+except ImportError:
+    try:
+        import tomli as tomllib     # pip install tomli
+    except ImportError:
+        sys.exit("Need Python 3.11+ or: pip install tomli")
+
+try:
+    with open(".streamlit/secrets.toml", "rb") as f:
+        secrets = tomllib.load(f)
+except FileNotFoundError:
+    sys.exit("Not found: .streamlit/secrets.toml\nCreate it and add your keys.")
+
+def get(key):
+    return secrets.get(key, "")
+
+print("\n=== Crowe's Nest — Secrets Validator ===\n")
+
+all_ok = True
+
+# ── 2. Key presence and basic format ─────────────────────────────────────────
+REQUIRED = {
+    "TURSO_URL":         ("libsql://", 30),
+    "TURSO_AUTH_TOKEN":  ("eyJ",      100),
+    "SUPABASE_URL":      ("https://",  30),
+    "SUPABASE_ANON_KEY": ("eyJ",      100),
+    "SUPABASE_BUCKET":   ("",           1),
+}
+
+print("── Key presence & length ──")
+for key, (prefix, min_len) in REQUIRED.items():
+    val = get(key)
+    if not val:
+        print(f"  ❌ {key}: MISSING")
+        all_ok = False
+    elif prefix and not val.startswith(prefix):
+        print(f"  ❌ {key}: wrong format (expected '{prefix}...')")
+        all_ok = False
+    elif len(val) < min_len:
+        print(f"  ❌ {key}: too short ({len(val)} chars, need ≥{min_len}) — likely truncated")
+        all_ok = False
+    else:
+        print(f"  ✅ {key}: {len(val)} chars  [{val[:24]}...]")
+
+print()
+
+# ── 3. Turso via HTTP REST API (no libsql install needed) ────────────────────
+print("── Turso connection (HTTP API) ──")
+try:
+    turso_url = get("TURSO_URL").replace("libsql://", "https://", 1)
+    token     = get("TURSO_AUTH_TOKEN")
+    endpoint  = f"{turso_url}/v2/pipeline"
+
+    payload = json.dumps({
+        "requests": [
+            {"type": "execute", "stmt": {"sql": "SELECT COUNT(*) as n FROM project_config"}},
+            {"type": "close"},
+        ]
+    }).encode()
+
+    req = urllib.request.Request(
+        endpoint,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type":  "application/json",
+        },
+        method="POST",
+    )
+
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read())
+
+    # Extract the count from the response
+    rows = body["results"][0]["response"]["result"]["rows"]
+    count = rows[0][0]["value"] if rows else "?"
+    print(f"  ✅ Connected — project_config rows: {count}")
+
+except urllib.error.HTTPError as e:
+    body = e.read().decode(errors="replace")
+    print(f"  ❌ HTTP {e.code}: {body}")
+    print("     → TURSO_AUTH_TOKEN is likely wrong or truncated.")
+    all_ok = False
+except Exception as e:
+    print(f"  ❌ FAILED: {e}")
+    all_ok = False
+
+print()
+
+# ── 4. Supabase bucket listing ────────────────────────────────────────────────
+print("── Supabase storage list ──")
+try:
+    from supabase import create_client
+    sb     = create_client(get("SUPABASE_URL"), get("SUPABASE_ANON_KEY"))
+    bucket = get("SUPABASE_BUCKET")
+
+    result = sb.storage.from_(bucket).list("receipts", {"limit": 10})
+    if isinstance(result, list):
+        print(f"  ✅ Bucket '{bucket}' accessible — {len(result)} object(s) in receipts/")
+    else:
+        print(f"  ⚠️  Unexpected list() response: {result}")
+        all_ok = False
+except Exception as e:
+    print(f"  ❌ FAILED: {e}")
+    print("     → Check SUPABASE_URL, SUPABASE_ANON_KEY, and bucket name.")
+    all_ok = False
+
+print()
+
+# ── 5. Supabase upload + public read ─────────────────────────────────────────
+print("── Supabase upload & public read ──")
+try:
+    from supabase import create_client
+    sb        = create_client(get("SUPABASE_URL"), get("SUPABASE_ANON_KEY"))
+    bucket    = get("SUPABASE_BUCKET")
+    test_path = "receipts/_test_validation.txt"
+
+    sb.storage.from_(bucket).upload(
+        test_path,
+        b"validation test - safe to delete",
+        file_options={"content-type": "text/plain", "upsert": "true"},
+    )
+
+    public_url = sb.storage.from_(bucket).get_public_url(test_path)
+
+    req = urllib.request.Request(public_url, method="HEAD")
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        status = resp.status
+
+    sb.storage.from_(bucket).remove([test_path])
+
+    if status == 200:
+        print("  ✅ Upload succeeded and file is publicly readable")
+        print("  ✅ Test file cleaned up")
+    else:
+        print(f"  ⚠️  Upload OK but HEAD returned HTTP {status}")
+        all_ok = False
+
+except Exception as e:
+    print(f"  ❌ FAILED: {e}")
+    print()
+    print("     Most likely cause: Supabase INSERT policy blocks anonymous uploads.")
+    print("     Fix in Supabase dashboard:")
+    print("       Storage → Buckets → receipts → Policies")
+    print("       Add INSERT policy: role = anon, definition = true")
+    all_ok = False
+
+print()
+print("── Summary ──")
+if all_ok:
+    print("  ✅ All checks passed — copy these values to Streamlit Cloud secrets.\n")
+else:
+    print("  ❌ Fix the issues above, then re-run this script.\n")
+
+
+================================================================================
 FILE: db\db_utils.py
 Path: C:\Python Projects\Home_Tracker\db\db_utils.py
-Size: 8.0 KB
+Size: 10.7 KB
 ================================================================================
 
 import streamlit as st
+import pandas as pd
 import os
 from datetime import date
 from utils.seeder import seed_data
@@ -275,34 +482,65 @@ def get_connection():
         if "TURSO_URL" not in st.secrets or "TURSO_AUTH_TOKEN" not in st.secrets:
             st.error("❌ Turso credentials missing in .streamlit/secrets.toml")
             st.stop()
-        conn = libsql.connect(
+        return libsql.connect(
             database=st.secrets["TURSO_URL"],
             auth_token=st.secrets["TURSO_AUTH_TOKEN"]
         )
-        return conn
-    else:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 
 def row_to_dict(row):
-    """Robust row → dict that works for BOTH local SQLite AND Turso/libsql on Streamlit Cloud."""
+    """Robust row → dict for both sqlite3 and Turso/libsql."""
     if row is None:
         return None
-    
-    # Turso / libsql rows (most common cause of crash on Cloud)
     if hasattr(row, '_mapping'):
         return dict(row._mapping)
-    
-    # Standard sqlite3.Row
     if hasattr(row, 'keys'):
         return dict(row)
-    
-    # Fallback for any other iterable/row-like object
     try:
         return dict(row)
     except Exception:
         return None
+
+
+def read_df(query, conn, params=None):
+    """Execute SELECT and return pd.DataFrame — safe for both sqlite3 and libsql/Turso.
+
+    pandas read_sql does not work with libsql connections. In cloud mode we build
+    the DataFrame manually. libsql rows may be plain tuples (no named access), so
+    we always extract column names from cursor.description and zip them positionally.
+    """
+    if DB_MODE == "local":
+        if params is None:
+            return pd.read_sql(query, conn)
+        # Use cursor directly so SQLite ? placeholders work with params
+        cursor = conn.execute(query, params)
+        cols = [d[0] for d in cursor.description]
+        rows = cursor.fetchall()
+        return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+    # Cloud / Turso path
+    cursor = conn.execute(query) if params is None else conn.execute(query, params)
+    rows = cursor.fetchall()
+    try:
+        cols = [d[0] for d in cursor.description]
+    except Exception:
+        cols = []
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    # First attempt: row_to_dict (works when rows have _mapping or keys())
+    try:
+        dicts = [row_to_dict(r) for r in rows]
+        if all(d is not None for d in dicts):
+            return pd.DataFrame(dicts)
+    except Exception:
+        pass
+    # Fallback: positional zip using cursor.description column names (plain tuples)
+    if cols:
+        return pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols)
+    return pd.DataFrame(rows)
+
 
 # ====================== INIT DB ======================
 def init_db():
@@ -366,8 +604,7 @@ def init_db():
         FOREIGN KEY(prerequisite_id) REFERENCES tasks(id)
     )""")
 
-    # ====================== RECEIPTS TABLE + TURSO-SAFE MIGRATION ======================
-# Receipts
+    # Receipts — base columns only; new columns added via migration below
     c.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY,
         file_path TEXT,
@@ -380,28 +617,6 @@ def init_db():
         linked_expense_id INTEGER,
         ocr_text TEXT
     )""")
-
-# ====================== TURSO-SAFE MIGRATION (adds missing columns) ======================
-    c.execute("PRAGMA table_info(receipts)")
-    existing_cols = {row[1] for row in c.fetchall()}
-
-    new_columns = {
-        "file_category":    "TEXT DEFAULT 'receipt'",
-        "linked_task_id":   "INTEGER",
-        "linked_permit_id": "INTEGER",
-        "document_type":    "TEXT"
-    }
-
-    for col_name, col_def in new_columns.items():
-        if col_name not in existing_cols:
-            try:
-                c.execute(f"ALTER TABLE receipts ADD COLUMN {col_name} {col_def}")
-                print(f"✅ Migrated receipts: added column '{col_name}'")
-            except Exception as e:
-                print(f"⚠️ Column '{col_name}' already exists: {e}")
-
-    conn.commit()
-    print("✅ receipts table migration complete (Quick Log + Documents now work)")
 
     c.execute("""CREATE TABLE IF NOT EXISTS permits (
         id INTEGER PRIMARY KEY,
@@ -428,13 +643,27 @@ def init_db():
 
     conn.commit()
 
-    # === Migrations (safe to run every time) ===
+    # === TURSO-SAFE MIGRATION: add columns that didn't exist at initial deploy ===
     c.execute("PRAGMA table_info(receipts)")
-    columns = [row[1] for row in c.fetchall()]
-    for col in ["linked_task_id", "linked_permit_id", "file_category", "tags"]:
-        if col not in columns:
-            c.execute(f"ALTER TABLE receipts ADD COLUMN {col} {'INTEGER' if 'id' in col else 'TEXT DEFAULT ''general'''}")
-            print(f"✅ Added missing column: {col}")
+    existing_cols = {row[1] for row in c.fetchall()}
+
+    new_columns = {
+        "file_category":    "TEXT DEFAULT 'receipt'",
+        "linked_task_id":   "INTEGER",
+        "linked_permit_id": "INTEGER",
+        "document_type":    "TEXT",
+        "auto_tag":         "TEXT",
+    }
+
+    for col_name, col_def in new_columns.items():
+        if col_name not in existing_cols:
+            try:
+                c.execute(f"ALTER TABLE receipts ADD COLUMN {col_name} {col_def}")
+                print(f"✅ Migrated receipts: added '{col_name}'")
+            except Exception as e:
+                print(f"⚠️ Migration note for '{col_name}': {e}")
+
+    conn.commit()
 
     # Seed only once
     c.execute("SELECT COUNT(*) FROM project_config WHERE id=1")
@@ -442,64 +671,114 @@ def init_db():
         seed_data(conn)
         print(f"✅ Crowe's Nest Build seeded in {DB_MODE} mode!")
 
+    # Cloud: prune orphaned receipts on every cold start. Two passes:
+    #   1. Local-path orphans  — file_path is NULL/empty/non-http (uploads/ is wiped on restart).
+    #   2. Bucket-mismatch orphans — file_path looks like a Supabase URL but the file
+    #      no longer exists in the bucket. These are the "ghosts that come back" because
+    #      the URL pattern alone can't tell them apart from valid records.
+    if DB_MODE == "cloud":
+        local_row = conn.execute("""
+            SELECT COUNT(*) FROM receipts
+            WHERE file_path IS NULL OR file_path = '' OR file_path NOT LIKE 'http%'
+        """).fetchone()
+        local_count = local_row[0] if local_row else 0
+        if local_count:
+            conn.execute("""
+                DELETE FROM receipts
+                WHERE file_path IS NULL OR file_path = '' OR file_path NOT LIKE 'http%'
+            """)
+            conn.commit()
+            print(f"🧹 Auto-cleaned {local_count} local-path orphan(s)")
+
+        try:
+            from utils.helpers import reconcile_supabase_with_db
+            bucket_pruned = reconcile_supabase_with_db(conn)
+            if bucket_pruned:
+                print(f"🧹 Pruned {bucket_pruned} bucket-mismatch ghost(s)")
+        except Exception as e:
+            print(f"⚠️ Skipping bucket reconciliation: {e}")
+
     conn.close()
+
+
+_CONFIG_FALLBACK = {
+    "name": "Crowe's Nest Build",
+    "total_budget": 450000.0,
+    "start_date": "2026-04-07",
+    "address": "450 SR 27, Whitwell, TN 37397",
+}
+
 
 def get_project_config():
     """Get project config — auto-initializes DB if missing (critical for Streamlit Cloud)."""
+    def _fetch():
+        conn = get_connection()
+        df = read_df("SELECT * FROM project_config WHERE id=1", conn)
+        conn.close()
+        return df.iloc[0].to_dict() if not df.empty else None
+
+    result = None
     try:
-        conn = get_connection()
-        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
-        conn.close()
+        result = _fetch()
     except Exception as e:
-        print(f"⚠️  DB connection error: {e} — running init_db() now...")
-        init_db()
-        conn = get_connection()
-        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
-        conn.close()
+        print(f"⚠️ DB error on first attempt: {e} — running init_db()")
+        try:
+            init_db()
+            result = _fetch()
+        except Exception as e2:
+            print(f"⚠️ init_db also failed: {e2}")
 
-    # If still no row, run full init
-    if row is None:
-        print("⚠️  No project_config found — running init_db() now...")
-        init_db()
-        conn = get_connection()
-        row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
-        conn.close()
+    if result is None:
+        try:
+            init_db()
+            result = _fetch()
+        except Exception as e3:
+            print(f"⚠️ Could not load project_config: {e3}")
 
-    return row_to_dict(row)
+    if result is None:
+        st.error(
+            "❌ Cannot connect to Turso database. Check that TURSO_URL and "
+            "TURSO_AUTH_TOKEN are set correctly in Streamlit Cloud Secrets "
+            "(share.streamlit.io → your app → Settings → Secrets)."
+        )
+        return dict(_CONFIG_FALLBACK)
+    return result
+
 
 def update_project_config(name, total_budget, start_date, address):
     conn = get_connection()
-    conn.execute("UPDATE project_config SET name=?, total_budget=?, start_date=?, address=? WHERE id=1",
-                 (name, total_budget, start_date, address))
+    conn.execute(
+        "UPDATE project_config SET name=?, total_budget=?, start_date=?, address=? WHERE id=1",
+        (name, total_budget, start_date, address)
+    )
     conn.commit()
     conn.close()
 
+
 def get_current_focus():
-    """Returns current/next task + permit for Quick Log sidebar + Dashboard alerts"""
-    conn = get_connection()
-    
-    # Current task (with due_date for overdue/current display)
-    task = conn.execute("""
-        SELECT id, title, due_date, planned_start, status
-        FROM tasks 
-        WHERE status != 'completed' 
-        ORDER BY planned_start LIMIT 1
-    """).fetchone()
-    
-    # Next pending permit
-    permit = conn.execute("""
-        SELECT id, name, required_date
-        FROM permits 
-        WHERE status = 'pending' 
-        ORDER BY required_date LIMIT 1
-    """).fetchone()
-    
-    conn.close()
-    
-    return {
-        "task": dict(task) if task else None,
-        "permit": dict(permit) if permit else None
-    }
+    """Returns current task + next pending permit for Quick Log and Dashboard."""
+    try:
+        conn = get_connection()
+        task_df = read_df("""
+            SELECT id, title, due_date, planned_start, status
+            FROM tasks
+            WHERE status != 'completed'
+            ORDER BY planned_start LIMIT 1
+        """, conn)
+        permit_df = read_df("""
+            SELECT id, name, required_date
+            FROM permits
+            WHERE status = 'pending'
+            ORDER BY required_date LIMIT 1
+        """, conn)
+        conn.close()
+        return {
+            "task":   task_df.iloc[0].to_dict() if not task_df.empty else None,
+            "permit": permit_df.iloc[0].to_dict() if not permit_df.empty else None,
+        }
+    except Exception:
+        return {"task": None, "permit": None}
+
 
 ================================================================================
 FILE: db\init.py
@@ -512,238 +791,236 @@ Size: 0.0 KB
 ================================================================================
 FILE: pages\01_🏠_Dashboard.py
 Path: C:\Python Projects\Home_Tracker\pages\01_🏠_Dashboard.py
-Size: 8.0 KB
+Size: 7.8 KB
 ================================================================================
 
 import streamlit as st
 import pandas as pd
-from db.db_utils import get_project_config, get_connection, row_to_dict, get_current_focus
+from datetime import date
+
+st.set_page_config(page_title="Crowe's Nest Build", layout="wide", page_icon="🏠")
+
+from db.db_utils import (
+    get_project_config, get_connection,
+    get_current_focus, init_db, read_df, is_cloud_mode,
+)
 from utils.charts import create_budget_pie, create_spend_line, create_gantt
 from utils.alerts import get_all_alerts
-from datetime import date
-from utils.helpers import save_uploaded_file
-from utils.sidebar import render_sidebar
-from db.db_utils import init_db
+from utils.sidebar import render_sidebar, quick_log_dialog
 
 if "db_initialized" not in st.session_state:
     init_db()
     st.session_state.db_initialized = True
 
-st.set_page_config(page_title="Crowe's Nest Build", layout="wide", page_icon="🏠")
-
-# Hide default Streamlit page navigation + your custom dark theme
+# Dark construction theme + FAB CSS + metric responsive grid
 st.markdown("""
 <style>
-    [data-testid="stSidebarNav"] { display: none; }
     .stApp { background-color: #0f1c12; color: #e8f5e9; }
-    .stButton>button { background-color: #8B0000; color: white; border-radius: 8px; }
+    .stButton > button { background-color: #8B0000; color: white; border-radius: 8px; }
     h1, h2, h3 { color: #e8f5e9; }
-    .metric-label { color: #90EE90; }
+
+    /* ── Quick Log pill FAB — fixed bottom-right on mobile ─────────── */
+    @media (max-width: 768px) {
+        [data-testid="stButton"][data-fab="true"] {
+            position: fixed !important;
+            bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important;
+            right: 16px !important;
+            z-index: 999 !important;
+            width: auto !important;
+            margin: 0 !important;
+        }
+        [data-testid="stButton"][data-fab="true"] button {
+            min-width: 140px !important;
+            height: 48px !important;
+            border-radius: 24px !important;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+            font-size: 1rem !important;
+        }
+    }
+
+    /* ── 4-metric row wraps to 2×2 on narrow screens ───────────────── */
+    @media (max-width: 640px) {
+        [data-testid="column"]:has([data-testid="stMetric"]) {
+            min-width: 48% !important;
+            flex: 0 0 48% !important;
+        }
+    }
 </style>
+<script>
+(function () {
+    /* Tag the Quick Log button so CSS can float it as a FAB on mobile */
+    function tagFAB() {
+        var btns = document.querySelectorAll('button[kind="primary"]');
+        for (var i = 0; i < btns.length; i++) {
+            if (btns[i].innerText.indexOf('Quick Log') !== -1) {
+                var wrap = btns[i].closest('[data-testid="stButton"]');
+                if (wrap) { wrap.setAttribute('data-fab', 'true'); }
+                return;
+            }
+        }
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', tagFAB);
+    } else {
+        tagFAB();
+    }
+    new MutationObserver(tagFAB).observe(document.body, { childList: true, subtree: true });
+})();
+</script>
 """, unsafe_allow_html=True)
 
-# ====================== SHARED SIDEBAR (mobile-optimized + consistent) ======================
 render_sidebar()
 
 config = get_project_config()
 
-# ====================== ALERTS ======================
-alerts = get_all_alerts()
-if alerts:
-    st.subheader("🚨 Current Alerts")
-    for alert in alerts:
-        st.info(alert["message"])
+# ── Storage health banner (cloud mode, missing Supabase secrets) ─────────
+if is_cloud_mode():
+    _missing = [k for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_BUCKET")
+                if k not in st.secrets]
+    if _missing:
+        st.warning(
+            f"⚠️ **File uploads disabled** — missing secrets: {', '.join(_missing)}. "
+            "Go to ⚙️ Settings → Storage Diagnostics for help."
+        )
 
-# Specific permits due soon
+# ── Quick Log FAB (floats on mobile, inline on desktop) ──────────────────
+if st.button("➕ Quick Log", type="primary", key="fab_ql",
+             help="Capture a photo or receipt on site"):
+    quick_log_dialog()
+
+# ── Alerts ───────────────────────────────────────────────────────────────
+for alert in get_all_alerts():
+    st.info(alert["message"])
+
+# ── Bulk DB fetch (single connection) ────────────────────────────────────
 conn = get_connection()
-due_soon = pd.read_sql("""
-    SELECT name, required_date
-    FROM permits
-    WHERE status = 'pending'
-      AND required_date <= date('now','+14 days')
+
+spent_row = conn.execute("SELECT COALESCE(SUM(amount),0) FROM expenses").fetchone()
+spent = spent_row[0] if spent_row else 0
+
+completed = conn.execute(
+    "SELECT COUNT(*) FROM tasks WHERE status='completed' AND phase_id > 1"
+).fetchone()[0]
+total_tasks = conn.execute(
+    "SELECT COUNT(*) FROM tasks WHERE phase_id > 1"
+).fetchone()[0]
+
+due_soon = read_df("""
+    SELECT name, required_date FROM permits
+    WHERE status = 'pending' AND required_date <= date('now','+14 days')
     ORDER BY required_date
 """, conn)
-conn.close()
-if not due_soon.empty:
-    st.caption("**Permits due soon (within 2 weeks):**")
-    st.dataframe(due_soon, use_container_width=True, hide_index=True)
 
-# ====================== METRICS ======================
-conn = get_connection()
-spent = pd.read_sql("SELECT COALESCE(SUM(amount),0) as spent FROM expenses", conn).iloc[0]['spent']
-conn.close()
-col1, col2, col3, col4 = st.columns(4)
-with col1: st.metric("Total Budget", f"${config['total_budget']:,.0f}")
-with col2: st.metric("Spent", f"${spent:,.0f}")
-with col3: st.metric("Remaining", f"${config['total_budget']-spent:,.0f}")
+recent_photos = read_df("""
+    SELECT id, original_filename, file_path, upload_date
+    FROM receipts
+    WHERE file_category IN ('photo', 'quick_log')
+      AND file_path LIKE 'http%'
+    ORDER BY upload_date DESC
+    LIMIT 3
+""", conn)
 
-# Realistic progress (your custom logic)
-conn = get_connection()
-completed = conn.execute("SELECT COUNT(*) FROM tasks WHERE status='completed' AND phase_id > 1").fetchone()[0]
-total_remaining = conn.execute("SELECT COUNT(*) FROM tasks WHERE phase_id > 1").fetchone()[0]
-progress = int((completed / total_remaining * 100)) if total_remaining > 0 else 0
 conn.close()
-with col4: st.metric("Progress", f"{progress}%")
+
+# ── Budget metrics ────────────────────────────────────────────────────────
+progress  = int(completed / total_tasks * 100) if total_tasks > 0 else 0
+remaining = config["total_budget"] - spent
+
+c1, c2, c3, c4 = st.columns(4)
+with c1: st.metric("Budget",    f"${config['total_budget']:,.0f}")
+with c2: st.metric("Spent",     f"${spent:,.0f}")
+with c3: st.metric("Remaining", f"${remaining:,.0f}")
+with c4: st.metric("Progress",  f"{progress}%")
 st.progress(progress / 100)
 
-# ====================== URGENT ITEMS CARDS ======================
-st.subheader("🚨 Urgent Items")
-colU1, colU2, colU3 = st.columns(3)
+if not due_soon.empty:
+    row = due_soon.iloc[0]
+    st.warning(f"⏳ Permit due soon: **{row['name']}** — {row['required_date']}")
+
+st.divider()
+
+# ── Today's Focus — primary action card ───────────────────────────────────
+st.subheader("📍 Today's Focus")
 current_focus = get_current_focus()
-with colU1:
-    if current_focus["task"]:
-        st.error(f"**Overdue / Current Task**\n{current_focus['task']['title']}\nDue: {current_focus['task']['due_date']}")
-    else:
-        st.success("No pending tasks")
-with colU2:
-    if current_focus["permit"]:
-        st.warning(f"**Permit Due Soon**\n{current_focus['permit']['name']}\nDue: {current_focus['permit']['required_date']}")
-    else:
-        st.success("All permits clear")
-with colU3:
-    conn = get_connection()
-    next_qol = conn.execute("""
-        SELECT category, description
-        FROM qol_ideas
-        WHERE status = 'planned'
-        ORDER BY estimated_cost LIMIT 1
-    """).fetchone()
-    conn.close()
-    if next_qol:
-        st.info(f"**Next QOL Idea**\n{next_qol['category']}: {next_qol['description'][:60]}...")
-    else:
-        st.success("All QOL ideas implemented")
 
-# ====================== QUICK PROGRESS PHOTO LOG + TASK COMPLETION ======================
-st.subheader("📸 Quick Progress Photo Log + Task Completion")
-st.caption("Mark current task done • Attach photo • Auto-links everything")
-current_focus = get_current_focus()
-col1, col2 = st.columns([2, 1])
-with col1:
-    if current_focus["task"]:
-        st.metric("Current Task", current_focus["task"]["title"],
-                 f"Due {current_focus['task']['due_date']}")
-        
-        if st.button("✅ Mark Current Task as Completed", type="primary", use_container_width=True):
-            conn = get_connection()
-            conn.execute("""
-                UPDATE tasks
-                SET status = 'completed',
-                    completed_date = date('now')
-                WHERE id = ?
-            """, (current_focus["task"]["id"],))
-            conn.commit()
-            conn.close()
-            st.success(f"✅ Task marked complete: {current_focus['task']['title']}")
-            st.rerun()
-    else:
-        st.success("No pending tasks!")
-with col2:
-    uploaded_photo = st.file_uploader("Attach progress photo",
-                                     type=["jpg", "jpeg", "png"],
-                                     key="dash_photo_quick")
-    
-    if uploaded_photo and current_focus["task"]:
-        notes = st.text_area("Photo notes",
-                            value=f"Progress on {current_focus['task']['title']}",
-                            height=80)
-        
-        if st.button("📸 Save Photo & Link to Task", type="secondary", use_container_width=True):
-            file_url = save_uploaded_file(uploaded_photo)
-            conn = get_connection()
-            conn.execute("""INSERT INTO receipts
-                (file_path, original_filename, upload_date, notes, file_category,
-                 linked_task_id, document_type)
-                VALUES (?,?,?,?,?,?,?)""",
-                (file_url, uploaded_photo.name, date.today().strftime("%Y-%m-%d"),
-                 notes, "photo", current_focus["task"]["id"], "document"))
-            conn.commit()
-            conn.close()
-            st.success("Photo saved and linked to task!")
-            st.rerun()
-
-# ====================== CHARTS ======================
-st.subheader("Budget Breakdown")
-st.plotly_chart(create_budget_pie(), use_container_width=True)
-
-st.subheader("Spending Over Time")
-st.plotly_chart(create_spend_line(), use_container_width=True)
-
-st.subheader("Full Gantt (Tasks + Permits)")
-st.plotly_chart(create_gantt(), use_container_width=True)
-
-# ====================== CURRENT + NEXT FOCUS ======================
-conn = get_connection()
-c = conn.cursor()
-c.execute("""
-    SELECT 'Task' as Type, title as Name, due_date as Due
-    FROM tasks WHERE status != 'completed'
-    ORDER BY planned_start ASC LIMIT 1
-""")
-current_task = row_to_dict(c.fetchone())
-c.execute("""
-    SELECT 'Permit' as Type, name as Name, required_date as Due
-    FROM permits WHERE status = 'pending'
-    ORDER BY required_date ASC LIMIT 1
-""")
-current_permit = row_to_dict(c.fetchone())
-if current_task and current_permit:
-    current_item = current_task if current_task['Due'] <= current_permit['Due'] else current_permit
-elif current_task:
-    current_item = current_task
-elif current_permit:
-    current_item = current_permit
+if current_focus["task"]:
+    task = current_focus["task"]
+    with st.container(border=True):
+        col_info, col_btn = st.columns([3, 1])
+        with col_info:
+            st.markdown(f"**{task['title']}**")
+            if task.get("due_date"):
+                st.caption(f"Due: {task['due_date']}")
+        with col_btn:
+            if st.button("✅ Done", type="primary", use_container_width=True, key="mark_done"):
+                conn2 = get_connection()
+                conn2.execute(
+                    "UPDATE tasks SET status='completed', completed_date=date('now') WHERE id=?",
+                    (task["id"],),
+                )
+                conn2.commit()
+                conn2.close()
+                st.success(f"✅ Completed: {task['title']}")
+                st.rerun()
 else:
-    current_item = None
+    st.success("✅ No pending tasks — great progress!")
 
-if current_item:
-    st.subheader(f"📍 **Current**: {current_item['Name']} ({current_item['Type']}) — Due {current_item['Due']}")
-    
-    c.execute("""
-        SELECT 'Task' as Type, title as Name, due_date as Due
-        FROM tasks WHERE status != 'completed'
-        ORDER BY planned_start ASC LIMIT 1 OFFSET 1
-    """)
-    next_task = row_to_dict(c.fetchone())
-    c.execute("""
-        SELECT 'Permit' as Type, name as Name, required_date as Due
-        FROM permits WHERE status = 'pending'
-        ORDER BY required_date ASC LIMIT 1 OFFSET 1
-    """)
-    next_permit = row_to_dict(c.fetchone())
-    
-    if next_task and next_permit:
-        next_item = next_task if next_task['Due'] <= next_permit['Due'] else next_permit
-    elif next_task:
-        next_item = next_task
-    elif next_permit:
-        next_item = next_permit
-    else:
-        next_item = None
-    
-    if next_item:
-        st.info(f"➡️ **Next**: {next_item['Name']} ({next_item['Type']}) — Due {next_item['Due']}")
-conn.close()
+if current_focus["permit"]:
+    permit = current_focus["permit"]
+    st.info(f"⏳ **Next permit:** {permit['name']} — Due {permit['required_date']}")
 
-st.caption("Crowe's Nest Build • Local-first Dashboard")
+st.divider()
+
+# ── Recent photos strip ───────────────────────────────────────────────────
+st.subheader("📸 Recent Photos")
+if not recent_photos.empty:
+    img_cols = st.columns(len(recent_photos))
+    for i, (_, row) in enumerate(recent_photos.iterrows()):
+        with img_cols[i]:
+            fname = str(row.get("original_filename", "")).lower()
+            if fname.endswith((".jpg", ".jpeg", ".png")):
+                st.image(str(row["file_path"]), use_container_width=True)
+            st.caption(str(row.get("upload_date", ""))[:10])
+    st.page_link("pages/04_📸_Photos.py", label="📸 See all photos →")
+else:
+    st.caption("No photos yet — tap ➕ Quick Log above to capture your first site photo")
+
+st.divider()
+
+# ── Charts (collapsed by default — keeps above-the-fold clean on mobile) ──
+with st.expander("💰 Budget Breakdown", expanded=False):
+    st.plotly_chart(create_budget_pie(), use_container_width=True)
+
+with st.expander("📈 Spending Over Time", expanded=False):
+    st.plotly_chart(create_spend_line(), use_container_width=True)
+
+with st.expander("🗓️ Full Project Gantt", expanded=False):
+    st.plotly_chart(create_gantt(), use_container_width=True)
+
+st.caption("Crowe's Nest Build • Dashboard")
+
 
 ================================================================================
 FILE: pages\02_🛤️_Roadmap.py
 Path: C:\Python Projects\Home_Tracker\pages\02_🛤️_Roadmap.py
-Size: 12.0 KB
+Size: 11.8 KB
 ================================================================================
 
 import streamlit as st
 import pandas as pd
-from db.db_utils import get_connection
-from utils.charts import create_gantt
 from datetime import date
+
+st.set_page_config(page_title="Roadmap", layout="wide", page_icon="🛤️")
+
+from db.db_utils import get_connection, init_db, read_df
+from utils.charts import create_gantt
+from utils.helpers import save_uploaded_file
 from utils.sidebar import render_sidebar
-from db.db_utils import init_db
 
 if "db_initialized" not in st.session_state:
     init_db()
     st.session_state.db_initialized = True
+
 render_sidebar()
 st.title("🛤️ Project Roadmap & Tasks")
 
@@ -752,32 +1029,30 @@ tab1, tab2, tab3 = st.tabs(["📊 Gantt Timeline", "Tasks & Dependencies", "📋
 # ====================== TAB 1: Gantt ======================
 with tab1:
     st.subheader("Full Project Gantt (Tasks + Permits & Inspections)")
-    gantt_fig = create_gantt()
-    st.plotly_chart(gantt_fig, use_container_width=True)
+    st.plotly_chart(create_gantt(), use_container_width=True)
 
-# ====================== TAB 2: Standard Tasks ======================
-# ====================== TAB 2: Standard Tasks ======================
+# ====================== TAB 2: Tasks ======================
 with tab2:
     st.subheader("Tasks & Dependencies")
-    
+
     conn = get_connection()
-    df_tasks = pd.read_sql("""
-        SELECT 
-            t.id, 
-            p.name as Phase, 
-            t.title, 
+    df_tasks = read_df("""
+        SELECT
+            t.id,
+            p.name AS Phase,
+            t.title,
             t.description,
-            t.planned_start, 
-            t.planned_end, 
-            t.due_date, 
+            t.planned_start,
+            t.planned_end,
+            t.due_date,
             t.status,
-            q.category as QOL_Category,
-            GROUP_CONCAT(pr.title) as Blocked_By
-        FROM tasks t 
-        JOIN phases p ON t.phase_id = p.id 
-        LEFT JOIN task_dependencies d ON t.id = d.task_id 
-        LEFT JOIN tasks pr ON d.prerequisite_id = pr.id 
-        LEFT JOIN qol_ideas q ON t.id = q.linked_task_id
+            q.category AS QOL_Category,
+            GROUP_CONCAT(pr.title) AS Blocked_By
+        FROM tasks t
+        JOIN phases p ON t.phase_id = p.id
+        LEFT JOIN task_dependencies d  ON t.id = d.task_id
+        LEFT JOIN tasks pr             ON d.prerequisite_id = pr.id
+        LEFT JOIN qol_ideas q          ON t.id = q.linked_task_id
         GROUP BY t.id
         ORDER BY p.order_num, t.planned_start
     """, conn)
@@ -789,31 +1064,31 @@ with tab2:
         hide_index=True,
         num_rows="fixed",
         column_config={
-            "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
-            "status": st.column_config.SelectboxColumn(
-                "Status", 
+            "id":           st.column_config.NumberColumn("ID", disabled=True, width="small"),
+            "status":       st.column_config.SelectboxColumn(
+                "Status",
                 options=["not_started", "in_progress", "completed", "delayed"],
-                required=True
+                required=True,
             ),
-            "Phase": st.column_config.TextColumn(disabled=True),
-            "Blocked_By": st.column_config.TextColumn(disabled=True),
+            "Phase":        st.column_config.TextColumn(disabled=True),
+            "Blocked_By":   st.column_config.TextColumn(disabled=True),
             "QOL_Category": st.column_config.TextColumn("From QOL Idea", disabled=True, width="medium"),
-        }
+        },
     )
 
-    colA, colB, colC = st.columns([1, 1, 1])
+    colA, colB, colC = st.columns(3)
     with colA:
         if st.button("💾 Save All Task Changes", type="primary", use_container_width=True):
             conn = get_connection()
             for _, row in edited_df.iterrows():
                 conn.execute("""
-                    UPDATE tasks 
-                    SET title=?, description=?, planned_start=?, planned_end=?, 
+                    UPDATE tasks
+                    SET title=?, description=?, planned_start=?, planned_end=?,
                         due_date=?, status=?
                     WHERE id=?
                 """, (
-                    row['title'], row['description'], row['planned_start'],
-                    row['planned_end'], row['due_date'], row['status'], int(row['id'])
+                    row["title"], row["description"], row["planned_start"],
+                    row["planned_end"], row["due_date"], row["status"], int(row["id"]),
                 ))
             conn.commit()
             conn.close()
@@ -824,24 +1099,33 @@ with tab2:
         with st.expander("➕ Add New Task"):
             with st.form("add_task_full"):
                 conn = get_connection()
-                phases = [row[0] for row in conn.execute("SELECT name FROM phases ORDER BY order_num").fetchall()]
+                phases = [r[0] for r in conn.execute(
+                    "SELECT name FROM phases ORDER BY order_num"
+                ).fetchall()]
                 conn.close()
                 phase_name = st.selectbox("Phase", phases)
-                title = st.text_input("Task Title *")
-                desc = st.text_area("Description")
-                start = st.date_input("Planned Start", date.today())
-                end = st.date_input("Planned End", date.today())
-                due = st.date_input("Due Date", date.today())
-                status = st.selectbox("Initial Status", ["not_started", "in_progress", "completed", "delayed"])
-                submitted = st.form_submit_button("Add Task")
-                if submitted and title:
+                title      = st.text_input("Task Title *")
+                desc       = st.text_area("Description")
+                start      = st.date_input("Planned Start", date.today())
+                end        = st.date_input("Planned End",   date.today())
+                due        = st.date_input("Due Date",      date.today())
+                status     = st.selectbox("Initial Status",
+                    ["not_started", "in_progress", "completed", "delayed"])
+                if st.form_submit_button("Add Task") and title:
                     conn = get_connection()
-                    phase_id = conn.execute("SELECT id FROM phases WHERE name=?", (phase_name,)).fetchone()[0]
-                    conn.execute("""INSERT INTO tasks 
-                        (phase_id, title, description, planned_start, planned_end, due_date, status, notes)
-                        VALUES (?,?,?,?,?,?,?,?)""",
-                        (phase_id, title, desc, start.strftime("%Y-%m-%d"), 
-                         end.strftime("%Y-%m-%d"), due.strftime("%Y-%m-%d"), status, "Added manually"))
+                    phase_id = conn.execute(
+                        "SELECT id FROM phases WHERE name=?", (phase_name,)
+                    ).fetchone()[0]
+                    conn.execute("""
+                        INSERT INTO tasks
+                            (phase_id, title, description, planned_start, planned_end,
+                             due_date, status, notes)
+                        VALUES (?,?,?,?,?,?,?,?)
+                    """, (
+                        phase_id, title, desc,
+                        start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"),
+                        due.strftime("%Y-%m-%d"), status, "Added manually",
+                    ))
                     conn.commit()
                     conn.close()
                     st.success("Task added!")
@@ -849,55 +1133,57 @@ with tab2:
 
     with colC:
         if not df_tasks.empty:
-            delete_title = st.selectbox("🗑️ Delete Task", df_tasks['title'].tolist(), key="delete_task")
+            delete_title = st.selectbox("🗑️ Delete Task", df_tasks["title"].tolist(), key="delete_task")
             if st.button("Delete Selected Task", use_container_width=True):
-                task_id = df_tasks[df_tasks['title'] == delete_title]['id'].iloc[0]
+                task_id = int(df_tasks[df_tasks["title"] == delete_title]["id"].iloc[0])
                 conn = get_connection()
                 conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
-                conn.execute("DELETE FROM task_dependencies WHERE task_id=? OR prerequisite_id=?", (task_id, task_id))
+                conn.execute(
+                    "DELETE FROM task_dependencies WHERE task_id=? OR prerequisite_id=?",
+                    (task_id, task_id),
+                )
                 conn.commit()
                 conn.close()
                 st.success(f"Deleted: {delete_title}")
                 st.rerun()
-# ====================== TAB 3: Permits & Inspections ======================
-# ====================== TAB 3: Permits & Inspections ======================
+
+# ====================== TAB 3: Permits ======================
 with tab3:
     st.subheader("📋 Permits & Inspections (Marion County TN)")
     st.caption("Separate from tasks • Appear on Gantt • Edit dates/status/notes here")
 
-    # NEW: One-click reload of all default permits
     if st.button("🔄 Load Default Marion County Permits & Inspections", type="primary", use_container_width=True):
         conn = get_connection()
         conn.execute("DELETE FROM permits")
         permits_data = [
-            ("Septic System Permit", "pending", "2026-04-14", None, "TDEC – must be approved BEFORE building permit. Soil test required first.", None),
-            ("County Building Permit", "pending", "2026-04-21", None, "Marion County – requires plans, septic approval, Owner/Builder Agreement", None),
+            ("Septic System Permit",      "pending", "2026-04-14", None, "TDEC – must be approved BEFORE building permit. Soil test required first.", None),
+            ("County Building Permit",    "pending", "2026-04-21", None, "Marion County – requires plans, septic approval, Owner/Builder Agreement", None),
             ("Electrical Permit (State)", "pending", "2026-05-01", None, "SFMO – required before rough electrical", None),
-            ("Plumbing Permit", "pending", "2026-05-01", None, "Required before rough plumbing", None),
-            ("Mechanical/HVAC Permit", "pending", "2026-05-01", None, "Required before rough HVAC", None),
-            ("Footing Inspection", "pending", "2026-04-28", None, "After trenches + rebar. TERMITE TREATMENT REQUIRED FIRST.", None),
-            ("Foundation Inspection", "pending", "2026-05-15", None, "After concrete cured + anchor bolts", None),
-            ("Rough-In Inspection", "pending", "2026-07-01", None, "After framing + all rough trades. Do NOT insulate yet.", None),
-            ("Final Inspection & CO", "pending", "2026-12-01", None, "All work complete + termite record on file", None),
+            ("Plumbing Permit",           "pending", "2026-05-01", None, "Required before rough plumbing", None),
+            ("Mechanical/HVAC Permit",    "pending", "2026-05-01", None, "Required before rough HVAC", None),
+            ("Footing Inspection",        "pending", "2026-04-28", None, "After trenches + rebar. TERMITE TREATMENT REQUIRED FIRST.", None),
+            ("Foundation Inspection",     "pending", "2026-05-15", None, "After concrete cured + anchor bolts", None),
+            ("Rough-In Inspection",       "pending", "2026-07-01", None, "After framing + all rough trades. Do NOT insulate yet.", None),
+            ("Final Inspection & CO",     "pending", "2026-12-01", None, "All work complete + termite record on file", None),
         ]
-        conn.executemany("""INSERT INTO permits 
-            (name, status, required_date, issued_date, notes, document_path) 
-            VALUES (?,?,?,?,?,?)""", permits_data)
+        conn.executemany(
+            "INSERT INTO permits (name, status, required_date, issued_date, notes, document_path) VALUES (?,?,?,?,?,?)",
+            permits_data,
+        )
         conn.commit()
         conn.close()
         st.success("✅ Default Marion County permits & inspections loaded!")
         st.rerun()
 
     conn = get_connection()
-    df_permits = pd.read_sql("""
-        SELECT id, name, status, required_date, issued_date, notes 
-        FROM permits 
-        ORDER BY required_date
-    """, conn)
+    df_permits = read_df(
+        "SELECT id, name, status, required_date, issued_date, notes FROM permits ORDER BY required_date",
+        conn,
+    )
     conn.close()
 
     if df_permits.empty:
-        st.info("No permits yet – click the button above to load defaults")
+        st.info("No permits yet – click the button above to load defaults.")
     else:
         edited_permits = st.data_editor(
             df_permits,
@@ -905,32 +1191,28 @@ with tab3:
             hide_index=True,
             num_rows="fixed",
             column_config={
-                "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
-                "status": st.column_config.SelectboxColumn(
-                    "Status", 
-                    options=["pending", "approved", "denied"],
-                    required=True
+                "id":            st.column_config.NumberColumn("ID", disabled=True, width="small"),
+                "status":        st.column_config.SelectboxColumn(
+                    "Status", options=["pending", "approved", "denied"], required=True
                 ),
                 "required_date": st.column_config.TextColumn("Required By"),
-                "issued_date": st.column_config.TextColumn("Issued On (leave blank if pending)"),
-                "name": st.column_config.TextColumn("Permit / Inspection"),
-                "notes": st.column_config.TextColumn("Notes / Dependencies")
-            }
+                "issued_date":   st.column_config.TextColumn("Issued On (leave blank if pending)"),
+                "name":          st.column_config.TextColumn("Permit / Inspection"),
+                "notes":         st.column_config.TextColumn("Notes / Dependencies"),
+            },
         )
 
-        colP1, colP2, colP3 = st.columns([1, 1, 1])
+        colP1, colP2, colP3 = st.columns(3)
         with colP1:
             if st.button("💾 Save Permit Changes", type="primary", use_container_width=True):
                 conn = get_connection()
                 for _, row in edited_permits.iterrows():
                     conn.execute("""
-                        UPDATE permits 
+                        UPDATE permits
                         SET status=?, required_date=?, issued_date=?, notes=?
                         WHERE id=?
-                    """, (
-                        row['status'], row['required_date'], row['issued_date'], 
-                        row['notes'], int(row['id'])
-                    ))
+                    """, (row["status"], row["required_date"], row["issued_date"],
+                          row["notes"], int(row["id"])))
                 conn.commit()
                 conn.close()
                 st.success("✅ Permits & Inspections updated!")
@@ -939,161 +1221,176 @@ with tab3:
         with colP2:
             with st.expander("➕ Add New Permit / Inspection"):
                 with st.form("add_permit_form"):
-                    name = st.text_input("Name (e.g. Footing Inspection)")
-                    status = st.selectbox("Status", ["pending", "approved", "denied"])
+                    name     = st.text_input("Name (e.g. Footing Inspection)")
+                    status   = st.selectbox("Status", ["pending", "approved", "denied"])
                     req_date = st.date_input("Required By", date.today())
-                    notes = st.text_area("Notes / Dependencies")
-                    submitted = st.form_submit_button("Add")
-                    if submitted and name:
+                    notes    = st.text_area("Notes / Dependencies")
+                    if st.form_submit_button("Add") and name:
                         conn = get_connection()
-                        conn.execute("""INSERT INTO permits 
-                            (name, status, required_date, issued_date, notes)
-                            VALUES (?,?,?,?,?)""",
-                            (name, status, req_date.strftime("%Y-%m-%d"), None, notes))
+                        conn.execute(
+                            "INSERT INTO permits (name, status, required_date, issued_date, notes) VALUES (?,?,?,?,?)",
+                            (name, status, req_date.strftime("%Y-%m-%d"), None, notes),
+                        )
                         conn.commit()
                         conn.close()
                         st.success("Permit added!")
                         st.rerun()
 
         with colP3:
-            # NEW: Quick file attachment to selected permit
-            if not df_permits.empty:
-                selected_permit_name = st.selectbox("📎 Attach file to permit", 
-                                                  df_permits['name'].tolist(), 
-                                                  key="attach_to_permit")
-                uploaded_attach = st.file_uploader("Upload permit doc / photo / soil test", 
-                                                 type=["jpg","jpeg","png","pdf"], 
-                                                 key="permit_upload")
-                if uploaded_attach and st.button("✅ Attach to Permit", use_container_width=True):
-                    file_url = save_uploaded_file(uploaded_attach)
-                    permit_id = df_permits[df_permits['name'] == selected_permit_name]['id'].iloc[0]
-                    
+            st.caption("📎 Attach file to permit")
+            selected_permit_name = st.selectbox(
+                "Select permit", df_permits["name"].tolist(), key="attach_to_permit"
+            )
+            uploaded_attach = st.file_uploader(
+                "Upload permit doc / photo / soil test",
+                type=["jpg", "jpeg", "png", "pdf"],
+                key="permit_upload",
+            )
+            if uploaded_attach and st.button("✅ Attach to Permit", use_container_width=True):
+                file_url = save_uploaded_file(uploaded_attach)
+                if file_url:
+                    permit_id = int(
+                        df_permits[df_permits["name"] == selected_permit_name]["id"].iloc[0]
+                    )
                     conn = get_connection()
-                    conn.execute("""INSERT INTO receipts 
-                        (file_path, original_filename, upload_date, vendor, amount, category, notes,
-                         linked_permit_id, file_category, document_type)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                        (file_url, uploaded_attach.name, date.today().strftime("%Y-%m-%d"),
-                         None, None, None, f"Attached to {selected_permit_name}",
-                         permit_id, "permit", "document"))
+                    conn.execute("""
+                        INSERT INTO receipts
+                            (file_path, original_filename, upload_date, notes,
+                             linked_permit_id, file_category, document_type)
+                        VALUES (?,?,?,?,?,?,?)
+                    """, (
+                        file_url, uploaded_attach.name,
+                        date.today().strftime("%Y-%m-%d"),
+                        f"Attached to {selected_permit_name}",
+                        permit_id, "permit", "document",
+                    ))
                     conn.commit()
                     conn.close()
                     st.success(f"✅ File attached to {selected_permit_name}!")
                     st.rerun()
 
+
 ================================================================================
 FILE: pages\03_💰_Budget.py
 Path: C:\Python Projects\Home_Tracker\pages\03_💰_Budget.py
-Size: 6.2 KB
+Size: 6.4 KB
 ================================================================================
 
 import streamlit as st
 import pandas as pd
 from datetime import date
-from db.db_utils import get_connection, get_current_focus
+
+st.set_page_config(page_title="Budget", layout="wide", page_icon="💰")
+
+from db.db_utils import get_connection, get_current_focus, init_db, read_df
 from utils.helpers import save_uploaded_file, perform_ocr, export_to_csv, import_csv
 from utils.sidebar import render_sidebar
-from db.db_utils import init_db
 
 if "db_initialized" not in st.session_state:
     init_db()
     st.session_state.db_initialized = True
+
 render_sidebar()
 st.title("💰 Budget & Financial Tracking")
 
 tab1, tab2, tab3 = st.tabs(["Categories", "Expenses + Receipts", "Import/Export"])
 
+# ====================== TAB 1: Categories ======================
 with tab1:
     st.subheader("Budget Categories")
     conn = get_connection()
-    df = pd.read_sql("SELECT * FROM budget_categories", conn)
-    st.dataframe(df, use_container_width=True)
+    df = read_df("SELECT * FROM budget_categories", conn)
     conn.close()
-    st.caption("Electrical category has permanent owner-labor note")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.caption("Electrical category: owner labor — materials cost only.")
 
-# ====================== EXPENSES + RECEIPT UPLOAD ======================
+# ====================== TAB 2: Expenses + Receipts ======================
 with tab2:
     st.subheader("Expenses & Receipts")
 
-    # === Add New Expense + Receipt Form ===
     with st.expander("➕ Add New Expense + Receipt", expanded=True):
         with st.form("add_expense_form"):
             colA, colB = st.columns(2)
             with colA:
                 date_input = st.date_input("Date", date.today())
-                amount = st.number_input("Amount $", min_value=0.01, value=0.01, step=0.01)
-                vendor = st.text_input("Vendor")
-            
+                amount     = st.number_input("Amount $", min_value=0.01, value=0.01, step=0.01)
+                vendor     = st.text_input("Vendor")
+
             with colB:
                 conn = get_connection()
-                cats = pd.read_sql("SELECT id, name FROM budget_categories", conn)
+                cats = read_df("SELECT id, name FROM budget_categories", conn)
                 conn.close()
-                category = st.selectbox("Category", cats['name'], index=0)
-                cat_id = cats[cats['name'] == category]['id'].iloc[0]
-            
+                category = st.selectbox("Category", cats["name"].tolist(), index=0)
+                cat_id   = int(cats[cats["name"] == category]["id"].iloc[0])
+
             description = st.text_input("Description", placeholder="e.g. Lumber for framing")
-            
-            uploaded_receipt = st.file_uploader("Attach receipt / scan (JPG, PNG, PDF)", 
-                                              type=["jpg", "jpeg", "png", "pdf"])
-            
-            # ====================== SMART AUTO-LINK ======================
+            uploaded_receipt = st.file_uploader(
+                "Attach receipt / scan (JPG, PNG, PDF)", type=["jpg", "jpeg", "png", "pdf"]
+            )
+
+            # Smart auto-link
             current_focus = get_current_focus()
-            link_options = ["None"]
+            link_options  = ["None"]
             default_index = 0
-            if current_focus["task"]:
+            if current_focus.get("task"):
                 link_options.append(f"Current Task: {current_focus['task']['title']}")
                 default_index = 1
-            if current_focus["permit"]:
+            if current_focus.get("permit"):
                 link_options.append(f"Current Permit: {current_focus['permit']['name']}")
-                if not current_focus["task"]:
+                if not current_focus.get("task"):
                     default_index = 1
-            
-            link_to = st.selectbox("Link to", link_options, index=default_index)
-            
-            task_id = permit_id = None
-            if "Task" in link_to and current_focus["task"]:
+
+            link_to  = st.selectbox("Link to", link_options, index=default_index)
+            task_id  = permit_id = None
+            if "Task" in link_to and current_focus.get("task"):
                 task_id = current_focus["task"]["id"]
-            elif "Permit" in link_to and current_focus["permit"]:
+            elif "Permit" in link_to and current_focus.get("permit"):
                 permit_id = current_focus["permit"]["id"]
-            
-            submitted = st.form_submit_button("💾 Save Expense + Receipt", type="primary")
-            
-            if submitted:
+
+            if st.form_submit_button("💾 Save Expense + Receipt", type="primary"):
                 conn = get_connection()
-                # Create expense
-                conn.execute("""INSERT INTO expenses 
-                    (category_id, date, amount, description, vendor)
-                    VALUES (?,?,?,?,?)""",
-                    (cat_id, date_input.strftime("%Y-%m-%d"), amount, description, vendor))
+                conn.execute("""
+                    INSERT INTO expenses (category_id, date, amount, description, vendor)
+                    VALUES (?,?,?,?,?)
+                """, (cat_id, date_input.strftime("%Y-%m-%d"), amount, description, vendor))
                 expense_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                
+
                 if uploaded_receipt:
                     file_url = save_uploaded_file(uploaded_receipt)
-                    ocr_text = perform_ocr(uploaded_receipt) if uploaded_receipt.type.startswith("image") else None
-                    
-                    conn.execute("""INSERT INTO receipts 
-                        (file_path, original_filename, upload_date, vendor, amount, notes,
-                         linked_expense_id, linked_task_id, linked_permit_id, 
-                         file_category, document_type, ocr_text)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (file_url, uploaded_receipt.name, date_input.strftime("%Y-%m-%d"),
-                         vendor, amount, description, expense_id, task_id, permit_id,
-                         "receipt", "document", ocr_text))
-                
+                    ocr_text = (
+                        perform_ocr(uploaded_receipt)
+                        if uploaded_receipt.type.startswith("image")
+                        else None
+                    )
+                    if file_url:
+                        conn.execute("""
+                            INSERT INTO receipts
+                                (file_path, original_filename, upload_date, vendor, amount, notes,
+                                 linked_expense_id, linked_task_id, linked_permit_id,
+                                 file_category, document_type, ocr_text)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                        """, (
+                            file_url, uploaded_receipt.name,
+                            date_input.strftime("%Y-%m-%d"),
+                            vendor, amount, description,
+                            expense_id, task_id, permit_id,
+                            "receipt", "document", ocr_text,
+                        ))
+
                 conn.commit()
                 conn.close()
-                st.success("✅ Expense and receipt saved with smart auto-link!")
+                st.success("✅ Expense and receipt saved!")
                 st.rerun()
 
-    # === Existing Expenses (editable) ===
+    # Existing expenses
     st.subheader("All Expenses")
     conn = get_connection()
-    df_exp = pd.read_sql("""
-        SELECT e.id, e.date, e.amount, e.description, e.vendor, 
-               c.name as category, r.original_filename as receipt
+    df_exp = read_df("""
+        SELECT e.id, e.date, e.amount, e.description, e.vendor,
+               c.name AS category, r.original_filename AS receipt
         FROM expenses e
         LEFT JOIN budget_categories c ON e.category_id = c.id
-        LEFT JOIN receipts r ON e.id = r.linked_expense_id
+        LEFT JOIN receipts r          ON e.id = r.linked_expense_id
         ORDER BY e.date DESC
     """, conn)
     conn.close()
@@ -1102,234 +1399,393 @@ with tab2:
         df_exp,
         use_container_width=True,
         num_rows="fixed",
-        column_config={"id": st.column_config.NumberColumn(disabled=True)}
+        hide_index=True,
+        column_config={"id": st.column_config.NumberColumn(disabled=True)},
     )
 
     if st.button("💾 Save Expense Changes", type="primary"):
         conn = get_connection()
         for _, row in edited_exp.iterrows():
-            conn.execute("""UPDATE expenses 
-                            SET date=?, amount=?, description=?, vendor=?, category_id=?
-                            WHERE id=?""",
-                         (row['date'], row['amount'], row['description'], 
-                          row['vendor'], 
-                          conn.execute("SELECT id FROM budget_categories WHERE name=?", (row['category'],)).fetchone()[0],
-                          row['id']))
+            cat_id_row = conn.execute(
+                "SELECT id FROM budget_categories WHERE name=?", (row["category"],)
+            ).fetchone()
+            if cat_id_row:
+                conn.execute("""
+                    UPDATE expenses
+                    SET date=?, amount=?, description=?, vendor=?, category_id=?
+                    WHERE id=?
+                """, (
+                    row["date"], row["amount"], row["description"],
+                    row["vendor"], cat_id_row[0], int(row["id"]),
+                ))
         conn.commit()
         conn.close()
         st.success("Expenses updated!")
         st.rerun()
 
-# ====================== IMPORT / EXPORT ======================
+# ====================== TAB 3: Import / Export ======================
 with tab3:
     st.subheader("Import / Export")
-    st.download_button("Export Expenses CSV", export_to_csv("expenses"), "expenses.csv", "text/csv")
+    st.download_button(
+        "⬇️ Export Expenses CSV",
+        export_to_csv("expenses"),
+        "expenses.csv",
+        "text/csv",
+    )
     if uploaded := st.file_uploader("Import CSV", type="csv"):
         import_csv(uploaded, "expenses")
         st.success("Imported!")
 
+
 ================================================================================
-FILE: pages\04_📖_Site_Diary.py
-Path: C:\Python Projects\Home_Tracker\pages\04_📖_Site_Diary.py
-Size: 6.2 KB
+FILE: pages\04_📸_Photos.py
+Path: C:\Python Projects\Home_Tracker\pages\04_📸_Photos.py
+Size: 14.3 KB
 ================================================================================
 
 import streamlit as st
 import pandas as pd
 from datetime import date
-import os
-from db.db_utils import get_connection, get_current_focus
+
+st.set_page_config(page_title="Build Photos", layout="wide", page_icon="📸")
+
+from db.db_utils import get_connection, init_db, read_df, get_current_focus
 from utils.helpers import save_uploaded_file, delete_receipt_file
+from utils.ai_assistant import classify_photo_url
 from utils.sidebar import render_sidebar
+
+if "db_initialized" not in st.session_state:
+    init_db()
+    st.session_state.db_initialized = True
 
 render_sidebar()
 
-st.set_page_config(page_title="📖 Site Diary", layout="wide")
-st.title("📖 Site Diary")
-st.caption("Chronological progress timeline • Family photos • Progress shots • Receipts")
+st.title("📸 Build Photos")
+st.caption("Progress photos organized by phase, timeline, and search")
 
-# ====================== DIRECT UPLOAD ======================
-st.subheader("➕ Upload New Progress Photo / Moment")
-current_focus = get_current_focus()
 
-uploaded = st.file_uploader("Take or upload a photo (JPG, PNG)", 
-                           type=["jpg", "jpeg", "png"], 
-                           key="diary_upload")
-
-if uploaded:
-    with st.form("diary_upload_form"):
-        notes = st.text_area("Notes / Description", height=80)
-        
-        link_options = ["None"]
-        default_index = 0
-        if current_focus.get("task"):
-            link_options.append(f"Current Task: {current_focus['task']['title']}")
-            default_index = 1
-        if current_focus.get("permit"):
-            link_options.append(f"Current Permit: {current_focus['permit']['name']}")
-            if not current_focus.get("task"):
-                default_index = 1
-        
-        link_to = st.selectbox("Link to (optional)", link_options, index=default_index)
-        
-        task_id = permit_id = None
-        if "Task" in link_to and current_focus.get("task"):
-            task_id = current_focus["task"]["id"]
-        elif "Permit" in link_to and current_focus.get("permit"):
-            permit_id = current_focus["permit"]["id"]
-        
-        if st.form_submit_button("✅ Save to Site Diary", type="primary"):
-            file_url = save_uploaded_file(uploaded)
-            conn = get_connection()
-            conn.execute("""INSERT INTO receipts 
-                (file_path, original_filename, upload_date, notes, file_category,
-                 linked_task_id, linked_permit_id)
-                VALUES (?,?,?,?,?,?,?)""",
-                (file_url, uploaded.name, date.today().strftime("%Y-%m-%d"),
-                 notes, "photo", task_id, permit_id))
-            conn.commit()
-            conn.close()
-            st.success("✅ Saved!")
-            st.rerun()
-
-# ====================== TIMELINE ======================
-st.divider()
-st.subheader("📅 All Diary Entries")
-
-# Refresh button
-if st.button("🔄 Refresh Diary", use_container_width=True):
-    st.rerun()
-
-# Clean missing images button
-if st.button("🧹 Clean All Missing Images", type="secondary", use_container_width=True):
-    conn = get_connection()
-    records = conn.execute("""
-        SELECT id, file_path 
-        FROM receipts 
-        WHERE file_category = 'photo' 
-          AND file_path NOT LIKE 'http%'
-    """).fetchall()
-    
-    deleted_count = 0
-    for row in records:
-        if not os.path.exists(row['file_path']):
-            conn.execute("DELETE FROM receipts WHERE id=?", (row['id'],))
-            deleted_count += 1
-    
-    conn.commit()
-    conn.close()
-    st.success(f"✅ Cleaned up {deleted_count} missing image records")
-    st.rerun()
-
-# Load fresh data
-conn = get_connection()
-df = pd.read_sql("""
-    SELECT 
-        r.id,
-        r.upload_date,
-        r.original_filename,
-        r.file_path,
-        r.notes,
-        r.file_category,
-        t.title as linked_task_title,
-        p.name as linked_permit_name
-    FROM receipts r
-    LEFT JOIN tasks t ON r.linked_task_id = t.id
-    LEFT JOIN permits p ON r.linked_permit_id = p.id
-    ORDER BY r.upload_date DESC
-""", conn)
-conn.close()
-
-if df.empty:
-    st.info("No entries yet. Upload some photos above!")
-    st.stop()
-
-df['upload_date'] = pd.to_datetime(df['upload_date'])
-
-for date_str, group in df.groupby(df['upload_date'].dt.date):
-    st.subheader(f"📅 {date_str.strftime('%A, %B %d, %Y')}")
-    
-    for _, row in group.iterrows():
-        filepath = row['file_path']
-        file_exists = os.path.exists(filepath) if not str(filepath).startswith("http") else True
-
-        with st.container(border=True):
-            col_img, col_info = st.columns([1, 3])
-            
-            with col_img:
-                if str(row['original_filename']).lower().endswith(('.jpg', '.jpeg', '.png')):
-                    if file_exists:
-                        st.image(filepath, use_container_width=True)
-                    else:
-                        st.error("🖼️ Image missing (file deleted)")
-                else:
-                    st.markdown("📄")
-            
-            with col_info:
-                st.markdown(f"**{row['file_category'].title()}** • {row['original_filename']}")
-                if row['linked_task_title']:
-                    st.caption(f"🔗 Task: **{row['linked_task_title']}**")
-                if row['linked_permit_name']:
-                    st.caption(f"🔗 Permit: **{row['linked_permit_name']}**")
-                if row['notes']:
-                    st.write(row['notes'])
-                
-                col_dl, col_del = st.columns([3, 1])
-                with col_dl:
-                    if file_exists and not str(filepath).startswith("http"):
-                        with open(filepath, "rb") as f:
-                            st.download_button(
-                                label="⬇️ Download",
-                                data=f.read(),
-                                file_name=row['original_filename'],
-                                mime="application/octet-stream",
-                                key=f"dl_{row['id']}"
-                            )
-                with col_del:
-                    if st.button("🗑️", key=f"del_{row['id']}"):
-                        if delete_receipt_file(filepath):
-                            conn = get_connection()
-                            conn.execute("DELETE FROM receipts WHERE id=?", (row['id'],))
-                            conn.commit()
-                            conn.close()
-                            st.success("✅ Photo deleted")
+# ── Photo grid helper ─────────────────────────────────────────────────────
+def _render_grid(df, key_prefix, cols=3):
+    """Render photos as a responsive grid with download + delete per card."""
+    for i in range(0, len(df), cols):
+        chunk = df.iloc[i:i + cols]
+        grid  = st.columns(cols)
+        for j, (_, photo) in enumerate(chunk.iterrows()):
+            pid = int(photo["id"])
+            fp  = str(photo.get("file_path", ""))
+            fn  = str(photo.get("original_filename", "")).lower()
+            with grid[j]:
+                with st.container(border=True):
+                    if fn.endswith((".jpg", ".jpeg", ".png")) and fp.startswith("http"):
+                        st.image(fp, use_container_width=True)
+                    elif fn.endswith((".jpg", ".jpeg", ".png")):
+                        st.caption("🖼️ Missing")
+                    notes_val = str(photo.get("notes", "") or "")
+                    if notes_val:
+                        st.caption(notes_val[:80])
+                    auto_tag  = str(photo.get("auto_tag", "") or "")
+                    date_str  = str(photo.get("upload_date", ""))[:10]
+                    st.caption(f"{date_str}{'  🏷️ ' + auto_tag if auto_tag else ''}")
+                    col_dl, col_del = st.columns([3, 1])
+                    with col_dl:
+                        if fp.startswith("http"):
+                            st.link_button("⬇️", url=fp, key=f"{key_prefix}_dl_{pid}")
+                    with col_del:
+                        if st.button("🗑️", key=f"{key_prefix}_del_{pid}"):
+                            delete_receipt_file(fp)
+                            c = get_connection()
+                            c.execute("DELETE FROM receipts WHERE id=?", (pid,))
+                            c.commit()
+                            c.close()
                             st.rerun()
 
-st.caption("📖 Site Diary • All photos and linked documents appear here automatically")
+
+# ── Upload ────────────────────────────────────────────────────────────────
+with st.expander("➕ Upload Build Photo", expanded=False):
+    current_focus = get_current_focus()
+    uploaded = st.file_uploader(
+        "Take or choose a photo", type=["jpg", "jpeg", "png"], key="photos_up"
+    )
+    if uploaded:
+        with st.form("photo_upload_form"):
+            notes_in = st.text_area("Notes / Description", height=60)
+
+            conn_t = get_connection()
+            tasks_df = read_df("""
+                SELECT t.id, t.title, p.name AS phase_name
+                FROM tasks t JOIN phases p ON t.phase_id = p.id
+                ORDER BY p.order_num, t.planned_start
+            """, conn_t)
+            conn_t.close()
+
+            task_opts = ["(none)"] + [
+                f"{r['phase_name']} → {r['title']}" for _, r in tasks_df.iterrows()
+            ]
+            default_i = 0
+            if current_focus.get("task"):
+                for idx, opt in enumerate(task_opts):
+                    if current_focus["task"]["title"] in opt:
+                        default_i = idx
+                        break
+
+            link_to = st.selectbox("Link to task (optional)", task_opts, index=default_i)
+            task_id = None
+            if link_to != "(none)":
+                sel_idx = task_opts.index(link_to) - 1
+                task_id = int(tasks_df.iloc[sel_idx]["id"])
+
+            if st.form_submit_button("✅ Save", type="primary"):
+                url = save_uploaded_file(uploaded)
+                if url:
+                    conn2 = get_connection()
+                    conn2.execute("""
+                        INSERT INTO receipts
+                            (file_path, original_filename, upload_date, notes,
+                             file_category, linked_task_id)
+                        VALUES (?,?,?,?,?,?)
+                    """, (url, uploaded.name, date.today().strftime("%Y-%m-%d"),
+                          notes_in, "photo", task_id))
+                    conn2.commit()
+                    conn2.close()
+                    st.success("✅ Saved!")
+                    st.rerun()
+
+# ── Tabs ──────────────────────────────────────────────────────────────────
+tab_phase, tab_timeline, tab_search = st.tabs(["📂 By Phase", "📅 Timeline", "🔍 Search"])
+
+
+# ====================== TAB 1: BY PHASE ======================
+with tab_phase:
+    conn = get_connection()
+    photos = read_df("""
+        SELECT
+            r.id, r.file_path, r.original_filename,
+            r.upload_date, r.notes, r.linked_task_id, r.auto_tag,
+            t.title     AS task_title,
+            p.name      AS phase_name,
+            p.order_num AS phase_order
+        FROM receipts r
+        LEFT JOIN tasks  t ON r.linked_task_id = t.id
+        LEFT JOIN phases p ON t.phase_id = p.id
+        WHERE r.file_category IN ('photo', 'quick_log')
+        ORDER BY
+            CASE WHEN p.order_num IS NULL THEN 999999 ELSE p.order_num END,
+            r.upload_date DESC
+    """, conn)
+    all_tasks = read_df("""
+        SELECT t.id, t.title, p.name AS phase_name
+        FROM tasks t JOIN phases p ON t.phase_id = p.id
+        ORDER BY p.order_num, t.planned_start
+    """, conn)
+    conn.close()
+
+    if photos.empty:
+        st.info("No build photos yet — upload one above or use ➕ Quick Log from the sidebar.")
+    else:
+        tagged   = photos[photos["phase_name"].notna()].copy()
+        untagged = photos[photos["phase_name"].isna()].copy()
+
+        # ── AI auto-tag backfill ──────────────────────────────────────────
+        with st.expander("🤖 AI Auto-Tag", expanded=False):
+            needs_tag = photos[photos["auto_tag"].isna() | (photos["auto_tag"] == "")]
+            if "GROQ_API_KEY" not in st.secrets:
+                st.info(
+                    "Add **GROQ_API_KEY** to Streamlit Cloud Secrets to enable AI photo tagging. "
+                    "Llama Vision via Groq will classify each photo into a construction category."
+                )
+            elif needs_tag.empty:
+                st.success("✅ All photos have an AI tag.")
+            else:
+                st.caption(f"{len(needs_tag)} photo(s) without an AI tag")
+                if st.button("🤖 Auto-Tag All", type="primary", key="autotag_all"):
+                    bar   = st.progress(0, text="Classifying…")
+                    total = len(needs_tag)
+                    for i, (_, photo) in enumerate(needs_tag.iterrows()):
+                        tag = classify_photo_url(str(photo["file_path"]))
+                        if tag:
+                            c_tag = get_connection()
+                            c_tag.execute(
+                                "UPDATE receipts SET auto_tag=? WHERE id=?",
+                                (tag, int(photo["id"])),
+                            )
+                            c_tag.commit()
+                            c_tag.close()
+                        bar.progress((i + 1) / total, text=f"Tagged {i + 1}/{total}…")
+                    st.success("✅ Done!")
+                    st.rerun()
+
+        # ── Filter chips by AI tag ────────────────────────────────────────
+        available_tags = sorted(t for t in photos["auto_tag"].dropna().unique() if t)
+        active_tags: list = []
+        if available_tags:
+            active_tags = st.multiselect(
+                "🏷️ Filter by AI tag", available_tags, key="phase_tag_filter"
+            )
+            if active_tags:
+                tagged   = tagged[tagged["auto_tag"].isin(active_tags)]
+                untagged = untagged[untagged["auto_tag"].isin(active_tags)]
+
+        # Render one section per phase, in phase order
+        if not tagged.empty:
+            phase_order = (
+                tagged[["phase_name", "phase_order"]]
+                .drop_duplicates()
+                .sort_values("phase_order")
+            )
+            for _, pr in phase_order.iterrows():
+                grp = tagged[tagged["phase_name"] == pr["phase_name"]]
+                st.subheader(f"🏗️ {pr['phase_name']}  ({len(grp)})")
+                _render_grid(grp.reset_index(drop=True),
+                             key_prefix=f"ph_{pr['phase_name'].replace(' ', '_')}")
+
+        # Untagged section with inline task-backfill
+        if not untagged.empty:
+            with st.expander(
+                f"📎 Untagged — {len(untagged)} photo(s) (tap Tag to assign)", expanded=True
+            ):
+                task_opts_bf = ["(skip)"] + [
+                    f"{r['phase_name']} → {r['title']}" for _, r in all_tasks.iterrows()
+                ]
+                for i in range(0, len(untagged), 3):
+                    chunk = untagged.iloc[i:i + 3]
+                    grid  = st.columns(3)
+                    for j, (_, photo) in enumerate(chunk.iterrows()):
+                        pid = int(photo["id"])
+                        fp  = str(photo.get("file_path", ""))
+                        fn  = str(photo.get("original_filename", "")).lower()
+                        with grid[j]:
+                            with st.container(border=True):
+                                if fn.endswith((".jpg", ".jpeg", ".png")) and fp.startswith("http"):
+                                    st.image(fp, use_container_width=True)
+                                st.caption(str(photo.get("upload_date", ""))[:10])
+                                sel = st.selectbox(
+                                    "Link to",
+                                    task_opts_bf,
+                                    key=f"tag_sel_{pid}",
+                                    label_visibility="collapsed",
+                                )
+                                col_t, col_d = st.columns(2)
+                                with col_t:
+                                    if st.button("🏷️ Tag", key=f"tag_btn_{pid}",
+                                                 use_container_width=True):
+                                        if sel != "(skip)":
+                                            new_tid = int(
+                                                all_tasks.iloc[
+                                                    task_opts_bf.index(sel) - 1
+                                                ]["id"]
+                                            )
+                                            c3 = get_connection()
+                                            c3.execute(
+                                                "UPDATE receipts SET linked_task_id=? WHERE id=?",
+                                                (new_tid, pid),
+                                            )
+                                            c3.commit()
+                                            c3.close()
+                                            st.rerun()
+                                with col_d:
+                                    if st.button("🗑️", key=f"del_ut_{pid}",
+                                                 use_container_width=True):
+                                        delete_receipt_file(fp)
+                                        c4 = get_connection()
+                                        c4.execute("DELETE FROM receipts WHERE id=?", (pid,))
+                                        c4.commit()
+                                        c4.close()
+                                        st.rerun()
+
+
+# ====================== TAB 2: TIMELINE ======================
+with tab_timeline:
+    conn = get_connection()
+    tl_df = read_df("""
+        SELECT id, file_path, original_filename, upload_date, notes, auto_tag
+        FROM receipts
+        WHERE file_category IN ('photo', 'quick_log')
+        ORDER BY upload_date DESC
+    """, conn)
+    conn.close()
+
+    if tl_df.empty:
+        st.info("No build photos yet.")
+    else:
+        tl_df["upload_date"] = pd.to_datetime(tl_df["upload_date"], errors="coerce")
+        tl_df["month"] = tl_df["upload_date"].dt.to_period("M")
+
+        for month, grp in tl_df.groupby("month", sort=False):
+            label = pd.Period(month, "M").strftime("%B %Y")
+            with st.expander(f"📅 {label} — {len(grp)} photo(s)", expanded=True):
+                _render_grid(grp.reset_index(drop=True), key_prefix=f"tl_{month}")
+
+
+# ====================== TAB 3: SEARCH ======================
+with tab_search:
+    q = st.text_input(
+        "Search", placeholder="foundation, pour, crane, dirtwork…",
+        label_visibility="collapsed", key="photos_search"
+    )
+    if q.strip():
+        conn = get_connection()
+        results = read_df("""
+            SELECT id, file_path, original_filename, upload_date, notes, auto_tag
+            FROM receipts
+            WHERE file_category IN ('photo', 'quick_log')
+              AND (notes LIKE ? OR original_filename LIKE ? OR auto_tag LIKE ?)
+            ORDER BY upload_date DESC
+        """, conn, params=(f"%{q}%", f"%{q}%", f"%{q}%"))
+        conn.close()
+
+        if results.empty:
+            st.info(f'No photos match "{q}"')
+        else:
+            st.caption(f"{len(results)} result(s) for **{q}**")
+            _render_grid(results.reset_index(drop=True), key_prefix="srch")
+    else:
+        st.caption("Type above to search across photo notes, filenames, and AI tags.")
+
+st.caption("📸 Build Photos")
+
 
 ================================================================================
 FILE: pages\05_📄_Documents.py
 Path: C:\Python Projects\Home_Tracker\pages\05_📄_Documents.py
-Size: 6.6 KB
+Size: 9.0 KB
 ================================================================================
 
 import streamlit as st
 import pandas as pd
 import os
 from datetime import date
-from db.db_utils import get_connection, get_current_focus
-from utils.helpers import save_uploaded_file, delete_receipt_file
+
+st.set_page_config(page_title="All Files Hub", layout="wide", page_icon="📁")
+
+from db.db_utils import get_connection, get_current_focus, init_db, read_df, is_cloud_mode
+from utils.helpers import save_uploaded_file, delete_receipt_file, reconcile_supabase_with_db
 from utils.sidebar import render_sidebar
+
+if "db_initialized" not in st.session_state:
+    init_db()
+    st.session_state.db_initialized = True
 
 render_sidebar()
 
 st.title("📁 All Files Hub")
 st.caption("Receipts • Permits • Plans • Progress Photos • Contracts • Inspo")
 
-# Filters
+# ====================== FILTERS ======================
 colA, colB, colC = st.columns([2, 1, 1])
 with colA:
     search = st.text_input("🔍 Search files (filename, notes, OCR)", "")
 with colB:
-    category_filter = st.selectbox("File Category",
-                                   ["All", "receipt", "permit", "plan", "photo", "contract", "general", "inspo"],
-                                   index=0)
+    category_filter = st.selectbox(
+        "File Category",
+        ["All", "receipt", "permit", "plan", "photo", "quick_log", "contract", "general", "inspo"],
+        index=0,
+    )
 with colC:
     date_filter = st.date_input("Uploaded after", value=None, label_visibility="collapsed")
 
-# Load data
+# ====================== LOAD ALL FILES ======================
 conn = get_connection()
-df = pd.read_sql("""
+df = read_df("""
     SELECT id, original_filename, upload_date, file_category, notes,
            linked_task_id, linked_permit_id, linked_expense_id,
            file_path, ocr_text
@@ -1338,109 +1794,154 @@ df = pd.read_sql("""
 """, conn)
 conn.close()
 
-# Apply filters
-if search:
-    mask = (df['original_filename'].str.contains(search, case=False, na=False)) | \
-           (df['notes'].str.contains(search, case=False, na=False)) | \
-           (df['ocr_text'].str.contains(search, case=False, na=False))
-    df = df[mask]
-if category_filter != "All":
-    df = df[df['file_category'] == category_filter]
-if date_filter:
-    df = df[pd.to_datetime(df['upload_date']) >= pd.to_datetime(date_filter)]
+# ====================== CLOUD GHOST CLEANUP ======================
+if is_cloud_mode():
+    col_ref, col_clean = st.columns(2)
+    with col_ref:
+        if st.button("🔄 Refresh from Supabase Bucket", use_container_width=True,
+                     help="Re-lists the Supabase bucket and removes DB rows whose files are gone"):
+            conn_r = get_connection()
+            pruned = reconcile_supabase_with_db(conn_r)
+            conn_r.close()
+            if pruned:
+                st.success(f"✅ Removed {pruned} ghost record(s) not found in bucket")
+            else:
+                st.info("✅ All records match bucket — nothing to clean")
+            st.rerun()
+    with col_clean:
+        if not df.empty:
+            ghost_mask = (
+                df["file_path"].isna() |
+                (df["file_path"] == "") |
+                ~df["file_path"].str.startswith("http", na=True)
+            )
+            ghost_count = int(ghost_mask.sum())
+            if ghost_count > 0:
+                if st.button(f"🧹 Remove {ghost_count} Local-Path Record(s)", type="secondary",
+                             use_container_width=True):
+                    ghost_ids = df[ghost_mask]["id"].tolist()
+                    conn = get_connection()
+                    for gid in ghost_ids:
+                        conn.execute("DELETE FROM receipts WHERE id=?", (int(gid),))
+                    conn.commit()
+                    conn.close()
+                    st.success(f"✅ Removed {ghost_count} orphaned record(s)")
+                    st.rerun()
+
+# ====================== APPLY FILTERS ======================
+if not df.empty:
+    if search:
+        mask = (
+            df["original_filename"].str.contains(search, case=False, na=False) |
+            df["notes"].str.contains(search, case=False, na=False) |
+            df["ocr_text"].str.contains(search, case=False, na=False)
+        )
+        df = df[mask]
+    if category_filter != "All":
+        df = df[df["file_category"] == category_filter]
+    if date_filter:
+        df = df[pd.to_datetime(df["upload_date"], errors="coerce") >= pd.to_datetime(date_filter)]
 
 if df.empty:
     st.info("No files yet — upload below!")
 else:
-    st.subheader("📋 All Files (click cells to edit)")
+    # ====================== FILE TABLE ======================
+    st.subheader("📋 All Files")
     edited_df = st.data_editor(
-        df[['id', 'original_filename', 'file_category', 'notes', 'upload_date']],
+        df[["id", "original_filename", "file_category", "notes", "upload_date"]],
         use_container_width=True,
         hide_index=True,
         column_config={
-            "id": st.column_config.NumberColumn(disabled=True),
+            "id":                st.column_config.NumberColumn(disabled=True),
             "original_filename": st.column_config.TextColumn("Filename"),
-            "file_category": st.column_config.SelectboxColumn(
-                "Category", 
-                options=["receipt", "permit", "plan", "photo", "contract", "general", "inspo"]
+            "file_category":     st.column_config.SelectboxColumn(
+                "Category",
+                options=["receipt", "permit", "plan", "photo", "quick_log",
+                         "contract", "general", "inspo"],
             ),
-            "notes": st.column_config.TextColumn("Notes"),
-            "upload_date": st.column_config.TextColumn(disabled=True),
-        }
+            "notes":             st.column_config.TextColumn("Notes"),
+            "upload_date":       st.column_config.TextColumn("Uploaded", disabled=True),
+        },
     )
 
     if st.button("💾 Save All Changes", type="primary"):
         conn = get_connection()
         for _, row in edited_df.iterrows():
             conn.execute("""
-                UPDATE receipts 
+                UPDATE receipts
                 SET original_filename=?, file_category=?, notes=?
                 WHERE id=?
-            """, (row['original_filename'], row['file_category'], row['notes'], int(row['id'])))
+            """, (row["original_filename"], row["file_category"], row["notes"], int(row["id"])))
         conn.commit()
         conn.close()
         st.success("✅ Changes saved!")
         st.rerun()
 
-    # Preview
-    st.subheader("📸 Preview Selected File")
+    # ====================== FILE PREVIEW ======================
+    st.subheader("📸 Preview / Download / Delete")
     selected_id = st.selectbox(
-        "Choose file",
-        df['id'].tolist(),
-        format_func=lambda x: df[df['id'] == x]['original_filename'].iloc[0]
+        "Choose file to preview",
+        df["id"].tolist(),
+        format_func=lambda x: df[df["id"] == x]["original_filename"].iloc[0],
     )
 
     if selected_id:
-        row = df[df['id'] == selected_id].iloc[0]
-        file_path = row['file_path']
-        filename = row['original_filename']
-        is_url = file_path and file_path.startswith(("http://", "https://"))
+        sel = df[df["id"] == selected_id].iloc[0]
+        file_path = sel["file_path"] or ""
+        filename  = sel["original_filename"]
+        is_url    = file_path.startswith(("http://", "https://"))
 
         st.caption(f"📄 {filename}")
 
         if is_url or (file_path and os.path.exists(file_path)):
-            if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-                st.image(file_path, width="stretch")
+            if filename.lower().endswith((".jpg", ".jpeg", ".png")):
+                st.image(file_path, use_container_width=True)
             else:
-                st.info(f"📄 {filename}")
+                st.info(f"📄 {filename} — non-image file")
         else:
-            st.warning("⚠️ File not found on storage")
+            st.warning("⚠️ File not found on storage (orphaned record)")
 
-        # Download
-        if is_url:
-            st.link_button("📥 Download File", url=file_path, key=f"link_{selected_id}")
-        elif file_path and os.path.exists(file_path):
-            with open(file_path, "rb") as f:
-                st.download_button("📥 Download File", data=f.read(), file_name=filename, key=f"dl_{selected_id}")
+        col_dl, col_del = st.columns(2)
+        with col_dl:
+            if is_url:
+                st.link_button("📥 Download File", url=file_path, key=f"link_{selected_id}")
+            elif file_path and os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    st.download_button(
+                        "📥 Download File", data=f.read(),
+                        file_name=filename, key=f"dl_{selected_id}",
+                    )
+        with col_del:
+            if st.button("🗑️ Delete File", type="secondary", key=f"del_{selected_id}"):
+                bucket_ok = delete_receipt_file(file_path)
+                conn = get_connection()
+                conn.execute("DELETE FROM receipts WHERE id=?", (int(selected_id),))
+                conn.commit()
+                conn.close()
+                if bucket_ok:
+                    st.success("✅ File deleted from storage and records")
+                else:
+                    st.warning("✅ Removed from records — file may not have been in storage bucket")
+                st.rerun()
 
-        # Delete
-        if st.button("🗑️ Delete File", type="secondary", key=f"del_{selected_id}"):
-            delete_receipt_file(file_path)
-            conn = get_connection()
-            conn.execute("DELETE FROM receipts WHERE id=?", (selected_id,))
-            conn.commit()
-            conn.close()
-            st.success("✅ File deleted")
-            st.rerun()
-
-        if row.get('ocr_text'):
-            st.text_area("OCR Text", row['ocr_text'], height=120, key=f"ocr_{selected_id}")
+        if sel.get("ocr_text"):
+            st.text_area("OCR Text", sel["ocr_text"], height=120, key=f"ocr_{selected_id}")
 
 # ====================== QUICK UPLOAD ======================
+st.divider()
 st.subheader("➕ Upload New File")
-uploaded = st.file_uploader("Any file (receipt, permit, plan, photo, inspo…)", 
-                           type=["jpg", "jpeg", "png", "pdf"])
+new_upload = st.file_uploader(
+    "Any file (receipt, permit, plan, photo, inspo…)", type=["jpg", "jpeg", "png", "pdf"]
+)
 
-if uploaded:
-    file_url = save_uploaded_file(uploaded)
-    st.success("✅ Uploaded!")
+if new_upload:
     current_focus = get_current_focus()
-    
     with st.form("quick_file_form"):
-        cat = st.selectbox("Category", ["receipt", "permit", "plan", "photo", "contract", "general", "inspo"])
+        cat   = st.selectbox("Category",
+            ["receipt", "permit", "plan", "photo", "contract", "general", "inspo"])
         notes = st.text_area("Notes / Description")
-        
-        link_options = ["None"]
+
+        link_options  = ["None"]
         default_index = 0
         if current_focus.get("task"):
             link_options.append(f"Current Task: {current_focus['task']['title']}")
@@ -1449,45 +1950,58 @@ if uploaded:
             link_options.append(f"Current Permit: {current_focus['permit']['name']}")
             if not current_focus.get("task"):
                 default_index = 1
-        
-        link_to = st.selectbox("Link to", link_options, index=default_index)
-        
-        task_id = permit_id = None
+
+        link_to  = st.selectbox("Link to", link_options, index=default_index)
+        task_id  = permit_id = None
         if "Task" in link_to and current_focus.get("task"):
             task_id = current_focus["task"]["id"]
         elif "Permit" in link_to and current_focus.get("permit"):
             permit_id = current_focus["permit"]["id"]
-        
-        submitted = st.form_submit_button("Save File")
-        if submitted:
-            conn = get_connection()
-            conn.execute("""INSERT INTO receipts
-                (file_path, original_filename, upload_date, notes, file_category,
-                 linked_task_id, linked_permit_id, document_type)
-                VALUES (?,?,?,?,?,?,?,?)""",
-                (file_url, uploaded.name, date.today().strftime("%Y-%m-%d"),
-                 notes, cat, task_id, permit_id, "document"))
-            conn.commit()
-            conn.close()
-            st.success("✅ File saved with smart auto-link!")
-            st.rerun()
+
+        if st.form_submit_button("💾 Save File"):
+            file_url = save_uploaded_file(new_upload)
+            if file_url:
+                conn = get_connection()
+                conn.execute("""
+                    INSERT INTO receipts
+                        (file_path, original_filename, upload_date, notes,
+                         file_category, linked_task_id, linked_permit_id, document_type)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, (
+                    file_url, new_upload.name,
+                    date.today().strftime("%Y-%m-%d"),
+                    notes, cat, task_id, permit_id, "document",
+                ))
+                conn.commit()
+                conn.close()
+                st.success("✅ File saved!")
+                st.rerun()
+
 
 ================================================================================
 FILE: pages\06_✅_Checklist.py
 Path: C:\Python Projects\Home_Tracker\pages\06_✅_Checklist.py
-Size: 5.0 KB
+Size: 5.7 KB
 ================================================================================
 
 import streamlit as st
 import pandas as pd
-from db.db_utils import get_connection
-from datetime import date
+from datetime import date, timedelta
+import calendar
+
+st.set_page_config(page_title="Checklist", layout="wide", page_icon="✅")
+
+from db.db_utils import get_connection, init_db, read_df
 from utils.sidebar import render_sidebar
+
+if "db_initialized" not in st.session_state:
+    init_db()
+    st.session_state.db_initialized = True
+
 render_sidebar()
 st.title("✅ Smart Checklist Generator")
 st.caption("Auto-generate phase-specific checklists and push items directly into your task list")
 
-# Predefined checklists per phase (tailored to your build)
 CHECKLISTS = {
     "1. Site Preparation": [
         "Clear trees and debris",
@@ -1495,7 +2009,7 @@ CHECKLISTS = {
         "Grade lot for drainage",
         "Install temporary power pole",
         "Mark utility lines (call 811)",
-        "Secure septic permit (applying this week)"
+        "Secure septic permit (applying this week)",
     ],
     "2. Foundation": [
         "Dig footings per engineering plans",
@@ -1503,59 +2017,66 @@ CHECKLISTS = {
         "Pour concrete foundation",
         "Allow proper cure time (7 days min)",
         "Backfill and compact",
-        "Install termite treatment"
+        "Install termite treatment",
     ],
     "3. Framing": [
         "Frame walls and floors",
         "Install roof trusses",
         "Sheathe exterior walls",
         "Install house wrap",
-        "Verify rough opening sizes for windows"
+        "Verify rough opening sizes for windows",
     ],
     "4. Rough-ins": [
         "Rough plumbing (owner coord)",
         "Rough electrical materials (owner install)",
         "Rough HVAC ductwork",
         "Install bath vents and exhausts",
-        "Get rough-in inspection"
+        "Get rough-in inspection",
     ],
     "5. Roofing": [
         "Install underlayment",
         "Lay shingles and ridge vent",
         "Flash all penetrations",
-        "Install gutters and downspouts"
+        "Install gutters and downspouts",
     ],
     "6. Exterior Finishes": [
         "Install windows and exterior doors",
         "Apply house siding",
         "Paint exterior trim",
-        "Install garage doors"
+        "Install garage doors",
     ],
     "7. Insulation & Drywall": [
         "Install insulation (walls + attic)",
         "Hang drywall",
         "Tape, mud, and sand",
-        "Install vapor barrier where required"
+        "Install vapor barrier where required",
     ],
     "8. Interior Finishes": [
         "Install trim and baseboards",
         "Paint interior walls",
         "Install interior doors",
-        "Hang cabinets and vanities"
+        "Hang cabinets and vanities",
     ],
     "9. Fixtures & Appliances": [
         "Install lighting fixtures (owner electrical)",
         "Set plumbing fixtures",
         "Install kitchen appliances",
-        "Final electrical trim-out"
+        "Final electrical trim-out",
     ],
     "10. Landscaping & Punch List": [
         "Final grading and driveway",
         "Seed or sod lawn",
         "Install landscaping plants",
-        "Complete punch list items"
-    ]
+        "Complete punch list items",
+    ],
 }
+
+
+def end_of_month(d: date) -> str:
+    """Return the last day of d's month as a YYYY-MM-DD string."""
+    last_day = calendar.monthrange(d.year, d.month)[1]
+    return d.replace(day=last_day).strftime("%Y-%m-%d")
+
 
 phase_name = st.selectbox("Select Phase", list(CHECKLISTS.keys()), index=0)
 
@@ -1571,20 +2092,31 @@ col1, col2 = st.columns(2)
 with col1:
     if st.button("➕ Add Selected Items to Tasks", type="primary", use_container_width=True):
         if selected_items:
-            conn = get_connection()
-            # Get phase_id
-            phase_id = conn.execute("SELECT id FROM phases WHERE name=?", (phase_name,)).fetchone()[0]
-            
-            for title in selected_items:
-                conn.execute("""INSERT INTO tasks 
-                    (phase_id, title, description, planned_start, planned_end, due_date, status, notes)
-                    VALUES (?,?,?,?,?,?,?,?)""",
-                    (phase_id, title, "From smart checklist", date.today().strftime("%Y-%m-%d"), 
-                     (date.today().replace(day=1) + pd.offsets.MonthEnd(1)).strftime("%Y-%m-%d"),
-                     date.today().strftime("%Y-%m-%d"), "not_started", "Added via checklist"))
-            conn.commit()
+            today = date.today()
+            conn  = get_connection()
+            phase_row = conn.execute(
+                "SELECT id FROM phases WHERE name=?", (phase_name,)
+            ).fetchone()
+            if phase_row:
+                phase_id = phase_row[0]
+                for title in selected_items:
+                    conn.execute("""
+                        INSERT INTO tasks
+                            (phase_id, title, description, planned_start, planned_end,
+                             due_date, status, notes)
+                        VALUES (?,?,?,?,?,?,?,?)
+                    """, (
+                        phase_id, title, "From smart checklist",
+                        today.strftime("%Y-%m-%d"),
+                        end_of_month(today),
+                        today.strftime("%Y-%m-%d"),
+                        "not_started", "Added via checklist",
+                    ))
+                conn.commit()
+                st.success(f"✅ {len(selected_items)} task(s) added to Roadmap!")
+            else:
+                st.error(f"Phase '{phase_name}' not found in database.")
             conn.close()
-            st.success(f"✅ {len(selected_items)} tasks added to Roadmap!")
             st.rerun()
         else:
             st.warning("Select at least one item")
@@ -1593,74 +2125,100 @@ with col2:
     if st.button("🔄 Regenerate Checklist", use_container_width=True):
         st.rerun()
 
-# Optional custom item
 with st.expander("✏️ Add Custom Checklist Item"):
     custom = st.text_input("Custom task for this phase")
     if st.button("Add Custom") and custom:
-        conn = get_connection()
-        phase_id = conn.execute("SELECT id FROM phases WHERE name=?", (phase_name,)).fetchone()[0]
-        conn.execute("""INSERT INTO tasks 
-            (phase_id, title, description, planned_start, planned_end, due_date, status, notes)
-            VALUES (?,?,?,?,?,?,?,?)""",
-            (phase_id, custom, "Custom checklist item", date.today().strftime("%Y-%m-%d"), 
-             date.today().strftime("%Y-%m-%d"), date.today().strftime("%Y-%m-%d"), "not_started", "Custom"))
-        conn.commit()
+        today = date.today()
+        conn  = get_connection()
+        phase_row = conn.execute(
+            "SELECT id FROM phases WHERE name=?", (phase_name,)
+        ).fetchone()
+        if phase_row:
+            conn.execute("""
+                INSERT INTO tasks
+                    (phase_id, title, description, planned_start, planned_end,
+                     due_date, status, notes)
+                VALUES (?,?,?,?,?,?,?,?)
+            """, (
+                phase_row[0], custom, "Custom checklist item",
+                today.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"),
+                today.strftime("%Y-%m-%d"), "not_started", "Custom",
+            ))
+            conn.commit()
+            st.success("Custom task added!")
         conn.close()
-        st.success("Custom task added!")
         st.rerun()
 
 st.subheader("Recently Added Checklist Tasks")
 conn = get_connection()
-recent = pd.read_sql("SELECT title, phase_id, status FROM tasks WHERE notes LIKE '%checklist%' ORDER BY id DESC LIMIT 10", conn)
-st.dataframe(recent, use_container_width=True, hide_index=True)
+recent = read_df(
+    "SELECT title, phase_id, status FROM tasks WHERE notes LIKE '%checklist%' ORDER BY id DESC LIMIT 10",
+    conn,
+)
 conn.close()
+st.dataframe(recent, use_container_width=True, hide_index=True)
+
 
 ================================================================================
 FILE: pages\07_🌳_QOL_Futureproofing.py
 Path: C:\Python Projects\Home_Tracker\pages\07_🌳_QOL_Futureproofing.py
-Size: 5.0 KB
+Size: 5.5 KB
 ================================================================================
 
 import streamlit as st
 import pandas as pd
-from db.db_utils import get_connection, get_current_focus
+
+st.set_page_config(page_title="QOL & Future-Proofing", layout="wide", page_icon="🌳")
+
+from db.db_utils import get_connection, init_db, read_df
 from utils.sidebar import render_sidebar
+
+if "db_initialized" not in st.session_state:
+    init_db()
+    st.session_state.db_initialized = True
+
 render_sidebar()
-st.set_page_config(page_title="🌳 QOL & Future-Proofing", layout="wide")
 st.title("🌳 QOL & Future-Proofing Tracker")
 st.caption("Your Master List • 20+ Year Forever Home • Mud, Horses, Kids, Durability")
 
 conn = get_connection()
-df = pd.read_sql("""
+df = read_df("""
     SELECT q.id, q.category, q.description, q.estimated_cost,
-           q.status, p.name as Phase, q.notes, q.linked_task_id,
-           t.title as linked_task_title
+           q.status, p.name AS Phase, q.notes, q.linked_task_id,
+           q.linked_phase_id,
+           t.title AS linked_task_title
     FROM qol_ideas q
     LEFT JOIN phases p ON q.linked_phase_id = p.id
-    LEFT JOIN tasks t ON q.linked_task_id = t.id
+    LEFT JOIN tasks  t ON q.linked_task_id  = t.id
     ORDER BY q.category, q.status
 """, conn)
 conn.close()
 
+display_cols = ["id", "category", "description", "estimated_cost",
+                "status", "Phase", "notes", "linked_task_title"]
 edited_df = st.data_editor(
-    df,
+    df[display_cols],
     use_container_width=True,
     hide_index=True,
     column_config={
-        "status": st.column_config.SelectboxColumn("Status", options=["planned", "in_progress", "implemented", "deferred"]),
-        "estimated_cost": st.column_config.NumberColumn("Est. Cost $", format="$%.0f"),
+        "id":                st.column_config.NumberColumn("ID", disabled=True, width="small"),
+        "status":            st.column_config.SelectboxColumn(
+            "Status", options=["planned", "in_progress", "implemented", "deferred"]
+        ),
+        "estimated_cost":    st.column_config.NumberColumn("Est. Cost $", format="$%.0f"),
         "linked_task_title": st.column_config.TextColumn("Linked Task", disabled=True),
-    }
+        "Phase":             st.column_config.TextColumn("Phase", disabled=True),
+    },
 )
 
 if st.button("💾 Save QOL Changes", type="primary"):
     conn = get_connection()
     for _, row in edited_df.iterrows():
-        conn.execute("""UPDATE qol_ideas 
-                        SET status=?, estimated_cost=?, notes=?, linked_task_id=?
-                        WHERE id=?""",
-                     (row['status'], row['estimated_cost'], row['notes'], 
-                      row.get('linked_task_id'), int(row['id'])))
+        conn.execute("""
+            UPDATE qol_ideas
+            SET status=?, estimated_cost=?, notes=?
+            WHERE id=?
+        """, (row["status"], row["estimated_cost"], row["notes"], int(row["id"])))
     conn.commit()
     conn.close()
     st.success("QOL tracker updated!")
@@ -1668,262 +2226,519 @@ if st.button("💾 Save QOL Changes", type="primary"):
 
 # ====================== BIDIRECTIONAL CONVERTER ======================
 with st.expander("➕ Turn QOL Idea into Task (or link existing task)", expanded=True):
-    colA, colB = st.columns(2)
-    with colA:
-        selected = st.selectbox("Choose QOL Idea", df['description'].tolist(), key="qol_select")
-        idea = df[df['description'] == selected].iloc[0]
-        
-        if st.button("✅ Convert to New Task + Link", type="primary", use_container_width=True):
-            conn = get_connection()
-            phase_id = idea['linked_phase_id'] or 1
-            
-            conn.execute("""INSERT INTO tasks 
-                (phase_id, title, description, planned_start, planned_end, due_date, status, notes)
-                VALUES (?,?,?,?,?,?,?,?)""",
-                (phase_id, f"QOL: {idea['category']}", idea['description'],
-                 "2026-04-22", "2026-05-15", "2026-05-15", "not_started", 
-                 f"From QOL: {idea['category']}"))
-            
-            new_task_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-            
-            # Link both directions
-            conn.execute("UPDATE qol_ideas SET linked_task_id = ? WHERE id = ?", 
-                        (new_task_id, idea['id']))
-            conn.commit()
-            conn.close()
-            st.success(f"✅ Task created and linked to QOL idea!")
-            st.rerun()
+    if df.empty:
+        st.info("No QOL ideas in the database yet.")
+    else:
+        colA, colB = st.columns(2)
+        with colA:
+            selected = st.selectbox("Choose QOL Idea", df["description"].tolist(), key="qol_select")
+            idea     = df[df["description"] == selected].iloc[0]
 
-    with colB:
-        # Quick link to existing task
-        conn = get_connection()
-        tasks = pd.read_sql("SELECT id, title FROM tasks WHERE status != 'completed'", conn)
-        conn.close()
-        
-        if not tasks.empty:
-            task_to_link = st.selectbox("Or link to existing task", 
-                                      tasks['title'].tolist(), key="link_existing")
-            task_id = tasks[tasks['title'] == task_to_link]['id'].iloc[0]
-            
-            if st.button("🔗 Link Selected Task to this QOL", use_container_width=True):
-                conn = get_connection()
-                conn.execute("UPDATE qol_ideas SET linked_task_id = ? WHERE id = ?", 
-                            (task_id, idea['id']))
+            if st.button("✅ Convert to New Task + Link", type="primary", use_container_width=True):
+                conn     = get_connection()
+                phase_id = idea.get("linked_phase_id") or 1
+                conn.execute("""
+                    INSERT INTO tasks
+                        (phase_id, title, description, planned_start, planned_end,
+                         due_date, status, notes)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, (
+                    phase_id, f"QOL: {idea['category']}", idea["description"],
+                    "2026-04-22", "2026-05-15", "2026-05-15", "not_started",
+                    f"From QOL: {idea['category']}",
+                ))
+                new_task_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                conn.execute(
+                    "UPDATE qol_ideas SET linked_task_id=? WHERE id=?",
+                    (new_task_id, int(idea["id"])),
+                )
                 conn.commit()
                 conn.close()
-                st.success("✅ QOL idea linked to task!")
+                st.success("✅ Task created and linked!")
                 st.rerun()
 
-# Optional unlink
-if not df.empty and df['linked_task_id'].notna().any():
+        with colB:
+            conn  = get_connection()
+            tasks = read_df("SELECT id, title FROM tasks WHERE status != 'completed'", conn)
+            conn.close()
+
+            if not tasks.empty:
+                task_to_link = st.selectbox(
+                    "Or link to existing task", tasks["title"].tolist(), key="link_existing"
+                )
+                link_task_id = int(tasks[tasks["title"] == task_to_link]["id"].iloc[0])
+
+                if st.button("🔗 Link Selected Task to this QOL", use_container_width=True):
+                    conn = get_connection()
+                    conn.execute(
+                        "UPDATE qol_ideas SET linked_task_id=? WHERE id=?",
+                        (link_task_id, int(idea["id"])),
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.success("✅ QOL idea linked to task!")
+                    st.rerun()
+
+# Unlink
+if not df.empty and df["linked_task_id"].notna().any():
     with st.expander("🔓 Unlink QOL from Task"):
-        unlink_id = st.selectbox("Unlink which QOL?", 
-                                df[df['linked_task_id'].notna()]['description'].tolist())
+        linked_descriptions = df[df["linked_task_id"].notna()]["description"].tolist()
+        unlink_desc = st.selectbox("Unlink which QOL?", linked_descriptions)
         if st.button("Unlink"):
-            conn = get_connection()
-            qol_id = df[df['description'] == unlink_id]['id'].iloc[0]
-            conn.execute("UPDATE qol_ideas SET linked_task_id = NULL WHERE id = ?", (qol_id,))
+            qol_id = int(df[df["description"] == unlink_desc]["id"].iloc[0])
+            conn   = get_connection()
+            conn.execute("UPDATE qol_ideas SET linked_task_id=NULL WHERE id=?", (qol_id,))
             conn.commit()
             conn.close()
             st.success("Unlinked!")
             st.rerun()
 
 st.subheader("Recently Added / Linked QOL Tasks")
-conn = get_connection()
-recent = pd.read_sql("""
-    SELECT q.category, q.description, t.title as task_title, q.status 
-    FROM qol_ideas q 
-    LEFT JOIN tasks t ON q.linked_task_id = t.id 
-    WHERE q.linked_task_id IS NOT NULL 
+conn    = get_connection()
+recent  = read_df("""
+    SELECT q.category, q.description, t.title AS task_title, q.status
+    FROM qol_ideas q
+    LEFT JOIN tasks t ON q.linked_task_id = t.id
+    WHERE q.linked_task_id IS NOT NULL
     ORDER BY q.id DESC LIMIT 8
 """, conn)
-st.dataframe(recent, use_container_width=True, hide_index=True)
 conn.close()
+st.dataframe(recent, use_container_width=True, hide_index=True)
+
 
 ================================================================================
 FILE: pages\08_🤖_AI_Assistant.py
 Path: C:\Python Projects\Home_Tracker\pages\08_🤖_AI_Assistant.py
-Size: 0.6 KB
+Size: 0.4 KB
 ================================================================================
 
 import streamlit as st
+
+st.set_page_config(page_title="AI Assistant", layout="wide", page_icon="🤖")
+
 from utils.ai_assistant import ai_chat_interface
 from utils.sidebar import render_sidebar
+
 render_sidebar()
-st.set_page_config(page_title="AI Assistant", layout="wide", page_icon="🤖")
 st.title("🤖 AI Construction Assistant")
 
-# Persistent history via session_state (survives page reloads)
 if "ai_messages" not in st.session_state:
     st.session_state.ai_messages = []
 
-ai_chat_interface()  # The function already uses st.session_state.messages – we can rename for clarity if you want
+ai_chat_interface()
 
-st.info("💡 Tip: Ask about sequencing, TN weather risks, permit timing...")
+st.info("💡 Tip: Ask about sequencing, TN weather risks, permit timing, QOL ideas…")
+
 
 ================================================================================
 FILE: pages\09_⚙️_Settings.py
 Path: C:\Python Projects\Home_Tracker\pages\09_⚙️_Settings.py
-Size: 7.1 KB
+Size: 11.8 KB
 ================================================================================
 
 import streamlit as st
 import pandas as pd
-from db.db_utils import get_project_config, update_project_config, get_connection
-from utils.seeder import seed_data
-from utils.helpers import export_to_csv
-import sqlite3
-import os
 from datetime import date
+import os
+
+st.set_page_config(page_title="Settings", layout="wide", page_icon="⚙️")
+
+from db.db_utils import (
+    get_project_config, update_project_config, get_connection,
+    init_db, read_df, is_cloud_mode, DB_MODE,
+)
+from utils.seeder import seed_data
+from utils.helpers import export_to_csv, list_bucket_contents, reconcile_supabase_with_db
 from utils.sidebar import render_sidebar
+
+if "db_initialized" not in st.session_state:
+    init_db()
+    st.session_state.db_initialized = True
+
 render_sidebar()
 st.title("⚙️ Settings & Project Management")
 st.caption("Edit project details, manage permits, reset data, and create backups")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Project Info", "Permits", "Data Reset & Backup", "About"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Project Info", "Permits", "Data Reset & Backup", "Storage Diagnostics", "About"])
 
+# ====================== TAB 1: Project Info ======================
 with tab1:
     st.subheader("Project Configuration")
     config = get_project_config()
-    
+
     with st.form("update_project"):
-        name = st.text_input("Project Name", config['name'])
-        budget = st.number_input("Total Budget $", value=config['total_budget'], min_value=100000.0)
-        start_date = st.date_input("Start Date (dirtwork)", date.fromisoformat(config['start_date']))
-        address = st.text_input("Address", config['address'])
-        
+        name       = st.text_input("Project Name", config["name"])
+        budget     = st.number_input("Total Budget $", value=float(config["total_budget"]), min_value=100000.0)
+        start_date = st.date_input("Start Date (dirtwork)", date.fromisoformat(config["start_date"]))
+        address    = st.text_input("Address", config["address"])
+
         if st.form_submit_button("Save Changes"):
             update_project_config(name, float(budget), start_date.strftime("%Y-%m-%d"), address)
             st.success("Project settings updated!")
             st.rerun()
 
+# ====================== TAB 2: Permits ======================
 with tab2:
     st.subheader("📋 Permits & Inspections (Marion County + State Requirements)")
-    st.caption("**Highlighted separately** from regular tasks • Critical path items")
+    st.caption("Highlighted separately from regular tasks • Critical path items")
 
     conn = get_connection()
-    permits_df = pd.read_sql("""
-        SELECT id, name, status, required_date, issued_date, notes 
-        FROM permits 
-        ORDER BY 
-            CASE WHEN name LIKE '%Permit%' THEN 1 ELSE 2 END,  -- permits first
+    permits_df = read_df("""
+        SELECT id, name, status, required_date, issued_date, notes
+        FROM permits
+        ORDER BY
+            CASE WHEN name LIKE '%Permit%' THEN 1 ELSE 2 END,
             required_date
     """, conn)
     conn.close()
 
-    # Color-coded display
     for _, row in permits_df.iterrows():
-        if row['status'] == 'approved' or row['issued_date']:
+        if row["status"] == "approved" or row["issued_date"]:
             st.success(f"✅ **{row['name']}** – Completed {row['issued_date'] or 'N/A'}")
-        elif row['status'] == 'pending':
+        elif row["status"] == "pending":
             st.warning(f"⏳ **{row['name']}** – Due {row['required_date']} | {row['notes']}")
         else:
             st.error(f"🚨 **{row['name']}** – {row['notes']}")
 
-    # Quick add (still works)
     with st.expander("➕ Add New Permit or Inspection"):
         with st.form("add_permit"):
-            p_name = st.text_input("Permit Name (e.g. Building Permit)")
-            p_status = st.selectbox("Status", ["pending", "approved", "denied"])
+            p_name     = st.text_input("Permit Name (e.g. Building Permit)")
+            p_status   = st.selectbox("Status", ["pending", "approved", "denied"])
             p_required = st.date_input("Required By", date.today())
-            p_notes = st.text_area("Notes")
+            p_notes    = st.text_area("Notes")
             if st.form_submit_button("Add Permit"):
                 conn = get_connection()
-                conn.execute("""INSERT INTO permits (name, status, required_date, issued_date, notes)
-                                VALUES (?,?,?,?,?)""", (p_name, p_status, p_required.strftime("%Y-%m-%d"), None, p_notes))
+                conn.execute("""
+                    INSERT INTO permits (name, status, required_date, issued_date, notes)
+                    VALUES (?,?,?,?,?)
+                """, (p_name, p_status, p_required.strftime("%Y-%m-%d"), None, p_notes))
                 conn.commit()
                 conn.close()
                 st.success("Permit added!")
                 st.rerun()
 
+# ====================== TAB 3: Reset & Backup ======================
 with tab3:
     st.subheader("Reset & Backup")
-    
+
     col1, col2 = st.columns(2)
+
     with col1:
-        st.write("**Danger Zone**")
-        confirm = st.checkbox("⚠️ I understand this will DELETE ALL current data and reset to the latest defaults (sitework complete, permits approved, footers this week)", 
-                             key="reset_confirm")
-        
+        st.write("**⚠️ Danger Zone**")
+        confirm = st.checkbox(
+            "I understand this will DELETE ALL current data and reset to the latest defaults "
+            "(sitework complete, permits approved, footers this week)",
+            key="reset_confirm",
+        )
         if st.button("🔄 Reset to Current $450k Defaults", type="secondary", use_container_width=True):
             if confirm:
                 conn = get_connection()
-                # Clear all data
-                conn.execute("DELETE FROM project_config WHERE id=1")
-                conn.execute("DELETE FROM budget_categories")
-                conn.execute("DELETE FROM expenses")
-                conn.execute("DELETE FROM tasks")
-                conn.execute("DELETE FROM task_dependencies")
-                conn.execute("DELETE FROM receipts")
-                conn.execute("DELETE FROM permits")
-                conn.execute("DELETE FROM qol_ideas")
+                for tbl in [
+                    "project_config", "budget_categories", "expenses",
+                    "tasks", "task_dependencies", "receipts", "permits", "qol_ideas",
+                ]:
+                    conn.execute(f"DELETE FROM {tbl}")
                 conn.commit()
-                
-                # Re-seed with latest state
                 seed_data(conn)
                 conn.close()
-                
-                st.success("✅ Database fully reset! Site prep complete, septic + building permit approved, footers being poured this week.")
+                st.success(
+                    "✅ Database fully reset! Site prep complete, septic + building permit "
+                    "approved, footers being poured this week."
+                )
                 st.rerun()
             else:
                 st.error("Please check the confirmation box first.")
 
     with col2:
-        st.write("Full Data Export")
+        st.write("**Full Data Export**")
         tables = ["budget_categories", "expenses", "tasks", "receipts", "permits", "qol_ideas"]
         for t in tables:
-            if st.button(f"Download {t} CSV", key=f"dl_{t}"):
-                st.download_button(f"✅ {t}.csv", export_to_csv(t), f"{t}.csv", "text/csv", key=f"download_{t}")
-        
-        # SQLite backup
-        if st.button("Download Full Database Backup (.sql)"):
-            conn = get_connection()
-            with open("backup.sql", "w", encoding="utf-8") as f:
-                for line in conn.iterdump():
-                    f.write(f"{line}\n")
-            conn.close()
-            with open("backup.sql", "rb") as f:
-                st.download_button("✅ Download backup.sql", f.read(), "home_build_backup.sql", "text/plain")
-    
+            st.download_button(
+                f"⬇️ {t}.csv",
+                data=export_to_csv(t),
+                file_name=f"{t}.csv",
+                mime="text/csv",
+                key=f"csv_{t}",
+            )
+
+        st.divider()
+
+        if DB_MODE == "local":
+            st.write("**SQLite Backup**")
+            if st.button("Download Full Database Backup (.sql)"):
+                conn = get_connection()
+                lines = list(conn.iterdump())
+                conn.close()
+                sql_dump = "\n".join(lines)
+                st.download_button(
+                    "✅ Download backup.sql",
+                    data=sql_dump.encode("utf-8"),
+                    file_name="home_build_backup.sql",
+                    mime="text/plain",
+                )
+        else:
+            st.info(
+                "☁️ Running on Turso (cloud DB) — SQL dump is not available. "
+                "Use the CSV exports above to back up your data."
+            )
+
         st.divider()
         st.subheader("📋 Professional Construction Binder")
-        st.caption("Full project report with Gantt, budget, permits, and more — perfect for inspectors")
-        
+        st.caption("Full project report with Gantt, budget, permits — perfect for inspectors")
+
         if st.button("📄 Generate & Download Construction Binder (PDF)", type="primary", use_container_width=True):
-            with st.spinner("Generating professional PDF binder..."):
-                from utils.binder import generate_construction_binder
-                filename = generate_construction_binder()
-                with open(filename, "rb") as f:
-                    st.download_button(
-                        label="✅ Download Construction Binder.pdf",
-                        data=f.read(),
-                        file_name=filename,
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-            st.success("Binder generated successfully!")
+            if is_cloud_mode():
+                st.warning(
+                    "PDF generation with embedded charts requires kaleido, which may not be "
+                    "available on Streamlit Cloud. If it fails, use the CSV exports instead."
+                )
+            with st.spinner("Generating PDF binder…"):
+                try:
+                    from utils.binder import generate_construction_binder
+                    filename = generate_construction_binder()
+                    with open(filename, "rb") as f:
+                        st.download_button(
+                            "✅ Download Construction Binder.pdf",
+                            data=f.read(),
+                            file_name=filename,
+                            mime="application/pdf",
+                            use_container_width=True,
+                        )
+                    st.success("Binder generated!")
+                except Exception as e:
+                    st.error(f"PDF generation failed: {e}")
+
+# ====================== TAB 4: Storage Diagnostics ======================
 with tab4:
+    st.subheader("☁️ Storage Diagnostics")
+    st.caption("See exactly what's in your Supabase bucket vs what the database thinks is there")
+
+    if not is_cloud_mode():
+        st.info("Running in local mode — Supabase diagnostics not available.")
+    else:
+        # Secrets check
+        missing_secrets = [k for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_BUCKET")
+                           if k not in st.secrets]
+        if missing_secrets:
+            st.error(f"❌ Missing Streamlit secrets: {', '.join(missing_secrets)}\n\n"
+                     "Go to share.streamlit.io → your app → Settings → Secrets to add them.")
+        else:
+            st.success(f"✅ Supabase secrets present  |  Bucket: `{st.secrets['SUPABASE_BUCKET']}`")
+
+            col_l, col_r = st.columns(2)
+
+            with col_l:
+                st.markdown("**Files in Supabase bucket**")
+                bucket_files = list_bucket_contents()
+                if bucket_files is None:
+                    st.error("Could not list bucket — API call failed. Check credentials and bucket policies.")
+                elif len(bucket_files) == 0:
+                    st.warning("Bucket is empty — no files have been successfully uploaded yet.")
+                else:
+                    st.success(f"{len(bucket_files)} file(s) in bucket")
+                    for f in bucket_files:
+                        st.caption(f"📄 `{f['name']}` ({f['size']} bytes)")
+
+            with col_r:
+                st.markdown("**Receipt rows in database**")
+                conn_d = get_connection()
+                db_rows = read_df("SELECT id, original_filename, file_path FROM receipts", conn_d)
+                conn_d.close()
+                if db_rows.empty:
+                    st.info("Database has 0 receipt rows.")
+                else:
+                    url_rows = db_rows[db_rows["file_path"].str.startswith("http", na=False)]
+                    bad_rows = db_rows[~db_rows["file_path"].str.startswith("http", na=False)]
+                    st.success(f"{len(url_rows)} row(s) with Supabase URLs")
+                    if len(bad_rows) > 0:
+                        st.error(f"{len(bad_rows)} row(s) with local/missing paths (ghosts)")
+                    for _, r in db_rows.iterrows():
+                        icon = "✅" if str(r["file_path"]).startswith("http") else "⚠️"
+                        st.caption(f"{icon} `{r['original_filename']}`")
+
+            st.divider()
+
+            st.markdown("**Reconcile now**")
+            st.caption("Removes DB rows whose file is not found in the bucket. Runs automatically on app startup, but you can trigger it manually here.")
+            if st.button("🔄 Reconcile DB with Bucket", type="primary", use_container_width=True):
+                conn_r = get_connection()
+                pruned = reconcile_supabase_with_db(conn_r)
+                conn_r.close()
+                if pruned > 0:
+                    st.success(f"✅ Removed {pruned} ghost record(s) from database")
+                else:
+                    st.info("✅ Nothing to clean — all DB rows match bucket contents (or bucket listing failed)")
+                st.rerun()
+
+            st.divider()
+
+            st.markdown("**How to fix upload failures**")
+            st.markdown("""
+If the bucket is empty but you've uploaded files, your Supabase INSERT policy is likely blocking anonymous writes.
+
+**Fix in Supabase dashboard:**
+1. Storage → Buckets → `receipts` → Policies
+2. Check for an INSERT policy. If none exists, create one:
+   - Policy name: `Allow public uploads`
+   - Allowed operation: INSERT
+   - Target roles: `anon` and `authenticated`
+   - Policy definition: `true` (allow all)
+3. Also confirm there is a SELECT policy for `anon` so uploaded files are publicly readable.
+
+After fixing the policies, try uploading a test photo from Site Diary. If it appears in the bucket in the Supabase dashboard, uploads are working.
+""")
+
+# ====================== TAB 5: About ======================
+with tab5:
     st.subheader("About Crowe's Nest Build")
-    st.markdown("""
-    **Local-first home construction manager**  
-    Budget: $350,000 • Start: 2026-04-07 • Location: 450 SR 27, Whitwell, TN 37397  
-    Owner electrical: materials only (permanent note)  
-    AI: Gemini 1.5 Flash (add key in `.streamlit/secrets.toml`)  
-    Storage: SQLite + local `uploads/` folder  
+    st.markdown(f"""
+    **Home construction manager for the Crowe family**
+
+    | Field | Value |
+    |---|---|
+    | Budget | $450,000 |
+    | Start | 2026-04-07 |
+    | Location | 450 SR 27, Whitwell, TN 37397 |
+    | Owner electrical | Materials only (no labor cost tracked) |
+    | DB mode | `{DB_MODE}` |
+    | AI | Gemini 1.5 Flash (add key in `.streamlit/secrets.toml`) |
     """)
-    
-    st.subheader("Future Improvements")
+
+    st.subheader("Planned Future Improvements")
     st.markdown("""
-    - Full OCR fine-tuning with custom Tesseract config  
-    - Email/SMS alerts (Twilio integration)  
-    - Mobile PWA manifest for on-site use  
-    - Photo logging with EXIF GPS  
-    - LLM switcher (add Grok or OpenAI keys)  
-    - Versioned backups with timestamps  
-    - Weather API integration for TN alerts  
+    - Full OCR fine-tuning with custom Tesseract config
+    - Email/SMS alerts (Twilio)
+    - Photo EXIF GPS tagging
+    - Weather API integration for TN storm alerts
+    - Versioned timestamped backups
+    - Full data export package (zip of CSVs + photos) at project completion
     """)
-    
-    st.caption("App built as a polished, modular, production-quality tool. Everything runs 100% locally.")
+
+
+================================================================================
+FILE: pages\10_🌿_Inspo_Board.py
+Path: C:\Python Projects\Home_Tracker\pages\10_🌿_Inspo_Board.py
+Size: 4.8 KB
+================================================================================
+
+import streamlit as st
+import pandas as pd
+from datetime import date
+
+st.set_page_config(page_title="Inspo Board", layout="wide", page_icon="🌿")
+
+from db.db_utils import get_connection, init_db, read_df
+from utils.helpers import save_uploaded_file, delete_receipt_file
+from utils.sidebar import render_sidebar
+
+if "db_initialized" not in st.session_state:
+    init_db()
+    st.session_state.db_initialized = True
+
+render_sidebar()
+
+st.title("🌿 Inspo Board")
+st.caption("Design ideas and inspiration — upload photos for rooms and finishes you want in the build")
+
+# ── Upload ────────────────────────────────────────────────────────────────
+with st.container(border=True):
+    st.subheader("➕ Add Inspiration Photo")
+    uploaded = st.file_uploader(
+        "Upload a photo or screenshot",
+        type=["jpg", "jpeg", "png"],
+        key="inspo_upload",
+    )
+    if uploaded:
+        with st.form("inspo_form"):
+            room = st.text_input(
+                "Room / Area",
+                placeholder="e.g. Kitchen, Master Bath, Living Room, Exterior…",
+            )
+            description = st.text_area("Notes (optional)", height=60)
+
+            if st.form_submit_button("✅ Save to Inspo Board", type="primary"):
+                notes_combined = (
+                    f"{room}: {description}" if room and description
+                    else room or description or ""
+                )
+                url = save_uploaded_file(uploaded)
+                if url:
+                    conn = get_connection()
+                    conn.execute("""
+                        INSERT INTO receipts
+                            (file_path, original_filename, upload_date, notes, file_category)
+                        VALUES (?,?,?,?,?)
+                    """, (url, uploaded.name, date.today().strftime("%Y-%m-%d"),
+                          notes_combined, "inspo"))
+                    conn.commit()
+                    conn.close()
+                    st.success("✅ Added to Inspo Board!")
+                    st.rerun()
+
+st.divider()
+
+# ── Inspo grid ────────────────────────────────────────────────────────────
+conn = get_connection()
+inspo_df = read_df("""
+    SELECT id, file_path, original_filename, upload_date, notes
+    FROM receipts
+    WHERE file_category = 'inspo'
+    ORDER BY upload_date DESC
+""", conn)
+conn.close()
+
+if inspo_df.empty:
+    st.info("No inspo photos yet — add some above to build your mood board!")
+else:
+    # Extract room label (text before first ":" in notes, if present)
+    def _room(notes_val):
+        s = str(notes_val or "").strip()
+        if ":" in s:
+            return s.split(":", 1)[0].strip() or "General"
+        return s or "General"
+
+    inspo_df["room"] = inspo_df["notes"].apply(_room)
+    rooms = inspo_df["room"].unique()
+
+    COLS = 3
+    for room in rooms:
+        grp = inspo_df[inspo_df["room"] == room]
+        st.subheader(f"🏠 {room}  ({len(grp)})")
+
+        for i in range(0, len(grp), COLS):
+            chunk = grp.iloc[i:i + COLS]
+            cols  = st.columns(COLS)
+            for j, (_, photo) in enumerate(chunk.iterrows()):
+                pid = int(photo["id"])
+                fp  = str(photo.get("file_path", ""))
+                fn  = str(photo.get("original_filename", "")).lower()
+                with cols[j]:
+                    with st.container(border=True):
+                        if fn.endswith((".jpg", ".jpeg", ".png")) and fp.startswith("http"):
+                            st.image(fp, use_container_width=True)
+
+                        # Show description (the part after "Room: ")
+                        notes_raw = str(photo.get("notes", "") or "")
+                        desc = notes_raw.split(":", 1)[1].strip() if ":" in notes_raw else notes_raw
+                        if desc:
+                            st.caption(desc[:120])
+                        st.caption(str(photo.get("upload_date", ""))[:10])
+
+                        col_dl, col_del = st.columns([3, 1])
+                        with col_dl:
+                            if fp.startswith("http"):
+                                st.link_button("⬇️", url=fp, key=f"inspo_dl_{pid}")
+                        with col_del:
+                            if st.button("🗑️", key=f"inspo_del_{pid}"):
+                                delete_receipt_file(fp)
+                                c = get_connection()
+                                c.execute("DELETE FROM receipts WHERE id=?", (pid,))
+                                c.commit()
+                                c.close()
+                                st.rerun()
+
+st.caption("🌿 Inspo Board")
+
 
 ================================================================================
 SKIPPED (binary file): uploads\image001.png
@@ -1936,39 +2751,105 @@ SKIPPED (binary file): uploads\newplot.png
 ================================================================================
 FILE: utils\ai_assistant.py
 Path: C:\Python Projects\Home_Tracker\utils\ai_assistant.py
-Size: 4.5 KB
+Size: 6.3 KB
 ================================================================================
 
+import io
+import base64
 import streamlit as st
-import google.generativeai as genai
-from db.db_utils import get_project_config, get_connection, row_to_dict
 
-def get_ai_response(user_prompt):
-    """Generate AI response with full project context and persistent phase awareness."""
-    config = get_project_config()
+try:
+    from groq import Groq
+    _GROQ_OK = True
+except ImportError:
+    _GROQ_OK = False
+
+from db.db_utils import get_connection
+
+CHAT_MODEL   = "llama-3.3-70b-versatile"
+VISION_MODEL = "llama-3.2-11b-vision-preview"
+
+# Construction photo categories used for AI classification
+PHOTO_TAGS = [
+    "foundation", "framing", "electrical", "plumbing",
+    "drywall", "roofing", "sitework", "exterior",
+    "interior_finish", "landscaping", "other",
+]
+
+
+def _get_client():
+    """Return a Groq client, or None if unavailable."""
+    if not _GROQ_OK or "GROQ_API_KEY" not in st.secrets:
+        return None
+    return Groq(api_key=st.secrets["GROQ_API_KEY"])
+
+
+def classify_photo_url(image_url: str):
+    """Send a Supabase photo URL to Groq Vision for construction category classification.
+
+    Returns one of PHOTO_TAGS, or None if classification fails or API key is absent.
+    Non-blocking — callers should handle None gracefully.
+    """
+    client = _get_client()
+    if client is None or not image_url or not image_url.startswith("http"):
+        return None
+    try:
+        import urllib.request
+        from PIL import Image
+
+        with urllib.request.urlopen(image_url, timeout=12) as resp:
+            image_bytes = resp.read()
+
+        fmt = Image.open(io.BytesIO(image_bytes)).format or "JPEG"
+        mime = "image/png" if fmt.upper() == "PNG" else "image/jpeg"
+        b64  = base64.standard_b64encode(image_bytes).decode("utf-8")
+
+        response = client.chat.completions.create(
+            model=VISION_MODEL,
+            max_tokens=20,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                    {
+                        "type": "text",
+                        "text": (
+                            "You are classifying a home construction site photo. "
+                            f"Choose exactly one label from this list: {', '.join(PHOTO_TAGS)}. "
+                            "Reply with only the single label, nothing else."
+                        ),
+                    },
+                ],
+            }],
+        )
+        tag = response.choices[0].message.content.strip().lower().rstrip(".")
+        return tag if tag in PHOTO_TAGS else "other"
+    except Exception:
+        return None
+
+
+def get_ai_response(user_prompt: str) -> str:
+    """Generate AI response with full project context."""
     conn = get_connection()
-    
-    # Get current phase (first incomplete phase)
-    current_phase_row = conn.execute("""
-        SELECT name FROM phases 
+    phase_row = conn.execute("""
+        SELECT name FROM phases
         WHERE order_num = (
-            SELECT MIN(order_num) FROM phases p 
+            SELECT MIN(order_num) FROM phases p
             WHERE NOT EXISTS (
-                SELECT 1 FROM tasks t 
+                SELECT 1 FROM tasks t
                 WHERE t.phase_id = p.id AND t.status = 'completed'
             )
         )
     """).fetchone()
-    
-    current_phase = current_phase_row['name'] if current_phase_row else "Site Preparation"
+    current_phase = phase_row[0] if phase_row else "Site Preparation"
     conn.close()
 
     system_prompt = f"""You are an expert home construction advisor for Brett's "Crowe's Nest Build" — a 2,000 sq ft forever home on 5 acres in Whitwell, TN (Marion County).
 Family: Brett (30M - gaming, hunting, fishing, golf), spouse (26F - passionate horse rider), two daughters (3yo + 8mo).
 Lifestyle: Heavy daily mud/TN clay, horse tack, fishing/hunting/golf gear, kids bringing in bugs/lizards/frogs. Outdoors-oriented active family.
-Key constraints: $450k budget (updated), owner doing electrical materials only, start April 7 2026.
+Key constraints: $450k budget, owner doing electrical materials only, start April 7 2026.
 Current phase: {current_phase}.
-Septic permit and building permit are approved. Foundation work is in progress this week.
+Septic permit and building permit are approved. Foundation work is in progress.
 TN weather risks, clay soils, Marion County permits.
 
 Master QOL/Future-Proofing List (always reference these):
@@ -1980,60 +2861,67 @@ Master QOL/Future-Proofing List (always reference these):
 - Kid-height closet features, bunk bed blocking
 - Grab-bar blocking, curbless shower, 36" doors
 - Full-extension soft-close drawers everywhere
-- And every other item from Brett's list.
 
 Answer practically, concisely, with clear next steps, cost-conscious suggestions, and safety warnings."""
 
-    full_prompt = system_prompt + "\n\nUser: " + user_prompt
-
-    if "GEMINI_API_KEY" in st.secrets:
+    client = _get_client()
+    if client:
         try:
-            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(full_prompt)
-            return response.text
+            response = client.chat.completions.create(
+                model=CHAT_MODEL,
+                max_tokens=1024,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ],
+            )
+            return response.choices[0].message.content
         except Exception as e:
-            return f"🔌 Gemini error: {str(e)}\n\n**Mock fallback:** {user_prompt} – In your current phase ({current_phase}), finish site prep before foundation. Check weather and get the septic permit this week!"
-    
-    # Pure mock fallback (always works)
-    return f"**Mock AI:** Great question for Crowe's Nest! {user_prompt} → Next step: Complete {current_phase.lower()}. Risk: TN spring rain – cover materials."
+            return (
+                f"🔌 Groq error: {e}\n\n"
+                f"**Fallback:** In phase {current_phase} — finish site prep before foundation. "
+                "Check weather and confirm permits this week!"
+            )
+
+    return (
+        f"**Mock AI:** Great question for Crowe's Nest! → Next step: Complete "
+        f"{current_phase.lower()}. Risk: TN spring rain – cover materials."
+    )
 
 
 def ai_chat_interface():
-    """Persistent AI chat interface using ai_messages key."""
-    st.subheader("🤖 AI Construction Assistant (Gemini 1.5 Flash)")
-    st.caption("Ask anything – phase advice, Do’s/Don’ts, risks, next steps, QOL ideas, etc.")
+    """Persistent AI chat interface."""
+    st.subheader("🤖 AI Construction Assistant (Llama 3.3 via Groq)")
+    st.caption("Ask anything – phase advice, Do's/Don'ts, risks, next steps, QOL ideas…")
 
-    # Use explicit "ai_messages" key for clear persistence across sessions/pages
+    if "GROQ_API_KEY" not in st.secrets:
+        st.warning(
+            "⚠️ GROQ_API_KEY not set — responses are mock answers. "
+            "Add your Groq API key in Streamlit Cloud → Settings → Secrets."
+        )
+
     if "ai_messages" not in st.session_state:
         st.session_state.ai_messages = []
 
-    # Display chat history
     for message in st.session_state.ai_messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # User input
     if prompt := st.chat_input("e.g. What are the next steps after foundation?"):
-        # Add user message
         st.session_state.ai_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
-
-        # Generate and display assistant response
         with st.chat_message("assistant"):
-            with st.spinner("Thinking with construction expertise..."):
+            with st.spinner("Thinking…"):
                 response = get_ai_response(prompt)
             st.markdown(response)
-
-        # Save assistant response
         st.session_state.ai_messages.append({"role": "assistant", "content": response})
 
-    # Optional copy button for last response
     if st.session_state.ai_messages and st.session_state.ai_messages[-1]["role"] == "assistant":
         if st.button("📋 Copy Last Response"):
             st.write(st.session_state.ai_messages[-1]["content"])
-            st.success("✅ Copied to clipboard (manual copy if needed)")
+            st.success("✅ Copied (manual copy if needed)")
+
 
 ================================================================================
 FILE: utils\alerts.py
@@ -2227,59 +3115,56 @@ def generate_construction_binder():
 ================================================================================
 FILE: utils\charts.py
 Path: C:\Python Projects\Home_Tracker\utils\charts.py
-Size: 4.5 KB
+Size: 3.8 KB
 ================================================================================
 
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
-from db.db_utils import get_connection
-from datetime import timedelta
 import streamlit as st
+from db.db_utils import get_connection, read_df
+
 
 def create_gantt():
-    """Responsive Gantt – much better on mobile (smaller height, tighter margins, better fonts)"""
+    """Responsive Gantt chart — works in both local and cloud (Turso) mode."""
     conn = get_connection()
 
-    # === TASKS (keep phase order) ===
-    df_tasks = pd.read_sql("""
-        SELECT 
+    df_tasks = read_df("""
+        SELECT
             t.id,
-            t.title as Task, 
-            p.name as Phase, 
-            t.planned_start as Start, 
-            t.planned_end as Finish, 
-            t.status as Status,
-            'Task' as Type,
-            GROUP_CONCAT(pr.title) as Blocked_By
-        FROM tasks t 
-        JOIN phases p ON t.phase_id = p.id 
-        LEFT JOIN task_dependencies d ON t.id = d.task_id 
-        LEFT JOIN tasks pr ON d.prerequisite_id = pr.id 
+            t.title  AS Task,
+            p.name   AS Phase,
+            t.planned_start AS Start,
+            t.planned_end   AS Finish,
+            t.status        AS Status,
+            'Task'          AS Type,
+            GROUP_CONCAT(pr.title) AS Blocked_By
+        FROM tasks t
+        JOIN phases p ON t.phase_id = p.id
+        LEFT JOIN task_dependencies d  ON t.id = d.task_id
+        LEFT JOIN tasks pr             ON d.prerequisite_id = pr.id
         GROUP BY t.id
         ORDER BY p.order_num, t.planned_start
     """, conn)
 
-    # === PERMITS (forced to bottom) ===
-    df_permits = pd.read_sql("""
-        SELECT 
-            name as Task,
-            'Permits & Inspections' as Phase,
-            required_date as Start,
-            COALESCE(issued_date, required_date) as Finish,
-            CASE 
+    df_permits = read_df("""
+        SELECT
+            name AS Task,
+            'Permits & Inspections' AS Phase,
+            required_date AS Start,
+            COALESCE(issued_date, required_date) AS Finish,
+            CASE
                 WHEN issued_date IS NOT NULL OR status = 'approved' THEN 'completed'
-                ELSE status 
-            END as Status,
-            'Permit' as Type,
-            NULL as Blocked_By
+                ELSE status
+            END AS Status,
+            'Permit' AS Type,
+            NULL AS Blocked_By
         FROM permits
         ORDER BY required_date
     """, conn)
 
     conn.close()
 
-    # Combine: Tasks first, then Permits
     df = pd.concat([df_tasks, df_permits], ignore_index=True)
 
     if df.empty:
@@ -2287,34 +3172,26 @@ def create_gantt():
         fig.update_layout(title="No tasks or permits yet", height=400)
         return fig
 
-    # Convert dates
-    df['Start'] = pd.to_datetime(df['Start'], errors='coerce')
-    df['Finish'] = pd.to_datetime(df['Finish'], errors='coerce')
+    df["Start"]  = pd.to_datetime(df["Start"],  errors="coerce")
+    df["Finish"] = pd.to_datetime(df["Finish"], errors="coerce")
 
-    # Visible duration for pending permits
-    mask = (df['Type'] == 'Permit') & (df['Status'] == 'pending')
-    df.loc[mask, 'Finish'] = df.loc[mask, 'Start'] + pd.Timedelta(days=14)
+    # Give pending permits a 14-day visible bar
+    mask = (df["Type"] == "Permit") & (df["Status"] == "pending")
+    df.loc[mask, "Finish"] = df.loc[mask, "Start"] + pd.Timedelta(days=14)
 
-    # Identify blocked tasks
-    df['Blocked_By'] = df['Blocked_By'].fillna('')
-    df['is_blocked'] = df['Blocked_By'].apply(lambda x: bool(x) and x.strip() != '')
+    df["Blocked_By"] = df["Blocked_By"].fillna("")
 
-    # Color map
     color_map = {
-        'completed': '#32CD32',
-        'in_progress': "#190AEC",
-        'not_started': "#ABCC17",
-        'delayed': '#FF0000',
-        'pending': '#BA55D3',
-        'approved': '#32CD32',
-        'denied': '#FF0000'
+        "completed":   "#32CD32",
+        "in_progress": "#190AEC",
+        "not_started": "#ABCC17",
+        "delayed":     "#FF0000",
+        "pending":     "#BA55D3",
+        "approved":    "#32CD32",
+        "denied":      "#FF0000",
     }
 
-    # === RESPONSIVE HEIGHT FOR MOBILE ===
-    # Auto-detect mobile based on screen width (works in PWA and browser)
-    is_mobile = st.session_state.get("mobile", False) or st.session_state.get("width", 1200) < 768
-    height = 520 if is_mobile else 720   # 520px on phone, 720px on desktop
-
+    # Mobile: use a shorter chart height via CSS rather than session_state guessing
     fig = px.timeline(
         df,
         x_start="Start",
@@ -2324,175 +3201,525 @@ def create_gantt():
         color_discrete_map=color_map,
         title="Project Gantt – Tasks + Permits & Inspections",
         hover_data=["Phase", "Type", "Blocked_By"],
-        height=height,
+        height=680,
     )
 
     fig.update_layout(
         autosize=True,
-        margin=dict(l=10, r=10, t=50, b=40),
-        xaxis_title="Timeline",
+        margin=dict(l=5, r=5, t=45, b=35),
+        xaxis_title="",
         yaxis_title="",
         legend_title="Status",
-        bargap=0.25,
-        xaxis=dict(tickformat="%b %d", tickangle=-45),
-        font=dict(size=11 if is_mobile else 12),
+        bargap=0.22,
+        xaxis=dict(tickformat="%b %d", tickangle=-40),
+        font=dict(size=11),
     )
 
-    # FORCE correct vertical order: Tasks on top, Permits at bottom
-    task_list = df[df['Type'] == 'Task']['Task'].tolist()
-    permit_list = df[df['Type'] == 'Permit']['Task'].tolist()
-    fig.update_yaxes(
-        categoryorder="array",
-        categoryarray=task_list + permit_list
-    )
+    task_list   = df[df["Type"] == "Task"]["Task"].tolist()
+    permit_list = df[df["Type"] == "Permit"]["Task"].tolist()
+    fig.update_yaxes(categoryorder="array", categoryarray=task_list + permit_list)
 
     return fig
 
 
-# === Unchanged helper charts ===
 def create_budget_pie():
     conn = get_connection()
-    df = pd.read_sql("SELECT name, planned_amount as value FROM budget_categories", conn)
+    df = read_df("SELECT name, planned_amount AS value FROM budget_categories", conn)
     conn.close()
-    fig = px.pie(df, names='name', values='value', title='Budget Allocation by Category')
-    fig.update_traces(textinfo='percent+label')
+    fig = px.pie(df, names="name", values="value", title="Budget Allocation by Category")
+    fig.update_traces(textinfo="percent+label")
     return fig
 
 
 def create_spend_line():
     conn = get_connection()
-    df = pd.read_sql("SELECT date, SUM(amount) as spend FROM expenses GROUP BY date ORDER BY date", conn)
+    df = read_df(
+        "SELECT date, SUM(amount) AS spend FROM expenses GROUP BY date ORDER BY date",
+        conn,
+    )
     conn.close()
     if df.empty:
-        df = pd.DataFrame({'date': [pd.Timestamp.now().date()], 'spend': [0]})
-    fig = px.line(df, x='date', y='spend', title='Cumulative Spending Over Time', markers=True)
+        df = pd.DataFrame({"date": [pd.Timestamp.now().date()], "spend": [0]})
+    df["spend"] = pd.to_numeric(df["spend"], errors="coerce").cumsum()
+    fig = px.line(df, x="date", y="spend", title="Cumulative Spending Over Time", markers=True)
     return fig
+
 
 ================================================================================
 FILE: utils\helpers.py
 Path: C:\Python Projects\Home_Tracker\utils\helpers.py
-Size: 2.7 KB
+Size: 10.7 KB
 ================================================================================
 
 import os
+import urllib.request
+import urllib.error
 from datetime import datetime
+from urllib.parse import urlsplit, unquote
 from PIL import Image
 import pandas as pd
 import streamlit as st
 
-# Local copy to avoid circular import
+
 def is_cloud_mode():
     return "TURSO_URL" in st.secrets and "TURSO_AUTH_TOKEN" in st.secrets
 
-# ====================== SUPABASE (only loaded in cloud mode) ======================
-if is_cloud_mode():
-    from supabase import create_client, Client
 
-    @st.cache_resource
-    def get_supabase_client() -> Client:
-        return create_client(
-            st.secrets["SUPABASE_URL"],
-            st.secrets["SUPABASE_ANON_KEY"]
-        )
+def _supabase_object_path_from_url(file_url: str, bucket: str) -> str | None:
+    """Extract the object path (e.g. 'receipts/20260424_x.jpg') from a public URL.
 
-# ====================== SAVE / DELETE / OCR ======================
+    Returns None if the URL doesn't belong to this bucket. Strips query string
+    and fragment, decodes percent-encoding.
+    """
+    if not file_url or not bucket:
+        return None
+    marker = f"/storage/v1/object/public/{bucket}/"
+    parts = urlsplit(file_url)
+    clean = f"{parts.scheme}://{parts.netloc}{parts.path}"
+    if marker not in clean:
+        return None
+    tail = clean.split(marker, 1)[1]
+    if not tail:
+        return None
+    return unquote(tail)
+
+
+# ====================== SUPABASE CLIENT ======================
+@st.cache_resource
+def get_supabase_client():
+    """Cached Supabase client — only created when first called in cloud mode."""
+    from supabase import create_client
+    return create_client(
+        st.secrets["SUPABASE_URL"],
+        st.secrets["SUPABASE_ANON_KEY"]
+    )
+
+
+# ====================== FILE SAVE / DELETE / OCR ======================
 def save_uploaded_file(uploaded_file):
+    """Save file to Supabase (cloud) or local uploads/ (local). Returns URL or path."""
     if is_cloud_mode():
-        supabase = get_supabase_client()
-        bucket = st.secrets["SUPABASE_BUCKET"]
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_path = f"receipts/{timestamp}_{uploaded_file.name}"
-        supabase.storage.from_(bucket).upload(
-            file_path, uploaded_file.getvalue(),
-            file_options={"content-type": uploaded_file.type}
-        )
-        return supabase.storage.from_(bucket).get_public_url(file_path)
+        missing = [k for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_BUCKET")
+                   if k not in st.secrets]
+        if missing:
+            st.error(
+                f"⚠️ File uploads are not configured. Add the following to your Streamlit Cloud "
+                f"secrets (share.streamlit.io → your app → Settings → Secrets): "
+                f"{', '.join(missing)}"
+            )
+            return None
+        try:
+            supabase = get_supabase_client()
+            bucket = st.secrets.get("SUPABASE_BUCKET", "receipts")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            object_path = f"receipts/{timestamp}_{uploaded_file.name}"
+
+            response = supabase.storage.from_(bucket).upload(
+                object_path,
+                uploaded_file.getvalue(),
+                file_options={"content-type": uploaded_file.type},
+            )
+
+            # supabase-py v1 returns an HTTP response object; v2 raises on failure.
+            # Handle v1 explicitly so we don't silently save a URL for a failed upload.
+            if hasattr(response, "status_code") and response.status_code >= 300:
+                try:
+                    detail = response.json()
+                except Exception:
+                    detail = getattr(response, "text", "")
+                st.error(
+                    f"☁️ Supabase upload rejected (HTTP {response.status_code}): {detail}\n\n"
+                    "Check that your Supabase bucket INSERT policy allows uploads. "
+                    "In the Supabase dashboard go to Storage → receipts → Policies "
+                    "and confirm there is a policy granting INSERT to `anon` or `authenticated`."
+                )
+                return None
+
+            public_url = supabase.storage.from_(bucket).get_public_url(object_path)
+
+            # Verify the file is actually reachable — get_public_url() constructs
+            # the URL locally without confirming the file landed in the bucket.
+            try:
+                req = urllib.request.Request(public_url, method="HEAD")
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    if resp.status >= 400:
+                        raise IOError(f"HTTP {resp.status}")
+            except urllib.error.HTTPError as e:
+                st.error(
+                    f"☁️ File uploaded but not accessible (HTTP {e.code}). "
+                    "Your Supabase bucket may be blocking reads, or the file path is wrong. "
+                    "Check Storage → receipts → Policies and ensure SELECT is allowed for `anon`."
+                )
+                return None
+            except Exception:
+                # Network/timeout — don't block the upload on a slow connection check
+                pass
+
+            return public_url
+        except Exception as e:
+            st.error(f"☁️ Cloud storage upload failed: {e}")
+            return None
     else:
         os.makedirs("uploads", exist_ok=True)
-        path = os.path.join("uploads", uploaded_file.name)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = f"{timestamp}_{uploaded_file.name}"
+        path = os.path.join("uploads", safe_name)
         with open(path, "wb") as f:
             f.write(uploaded_file.getbuffer())
         return path
 
-def delete_receipt_file(file_url: str):
+
+def delete_receipt_file(file_url: str) -> bool:
+    """Delete the underlying file from Supabase (cloud) or local disk (local).
+
+    Returns True only when the storage backend confirms the file was removed.
+    Returns False on any of: empty URL, non-matching bucket, missing file,
+    Supabase reporting an empty result, or any exception.
+    """
+    if not file_url:
+        return False
+
     if is_cloud_mode() and "supabase.co" in str(file_url):
         try:
-            supabase = get_supabase_client()
-            bucket = st.secrets["SUPABASE_BUCKET"]
-            path = file_url.split("/storage/v1/object/public/receipts/")[-1]
-            supabase.storage.from_(bucket).remove([f"receipts/{path}"])
-        except:
-            pass
-    elif not is_cloud_mode() and os.path.exists(file_url):
-        try:
-            os.remove(file_url)
-        except:
-            pass
+            bucket = st.secrets.get("SUPABASE_BUCKET", "receipts")
+            object_path = _supabase_object_path_from_url(file_url, bucket)
+            if not object_path:
+                return False
 
-def perform_ocr(uploaded_file):
+            supabase = get_supabase_client()
+            response = supabase.storage.from_(bucket).remove([object_path])
+
+            # supabase-py v2 returns a list of removed FileObject dicts.
+            if isinstance(response, list):
+                return len(response) > 0
+            # Some client versions wrap the result as {"data": [...], "error": ...}.
+            if isinstance(response, dict):
+                err = response.get("error")
+                data = response.get("data") or []
+                return bool(data) and not err
+            return False
+        except Exception:
+            return False
+
+    if not is_cloud_mode():
+        if file_url and os.path.exists(file_url):
+            try:
+                os.remove(file_url)
+                return True
+            except Exception:
+                return False
+        return False
+
+    return False
+
+
+def reconcile_supabase_with_db(conn) -> int:
+    """Cloud only: list bucket objects and delete DB rows whose Supabase file is gone.
+
+    Returns the number of ghost rows pruned. Safely no-ops (returns 0) when
+    Supabase isn't fully configured or any error occurs, so app startup is
+    never blocked by a transient Supabase outage.
+    """
+    if not is_cloud_mode():
+        return 0
+    for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_BUCKET"):
+        if k not in st.secrets:
+            return 0
+
+    try:
+        bucket = st.secrets["SUPABASE_BUCKET"]
+        supabase = get_supabase_client()
+
+        objects = supabase.storage.from_(bucket).list(
+            "receipts", {"limit": 1000, "offset": 0}
+        )
+        if not isinstance(objects, list):
+            return 0
+        valid_paths = {
+            f"receipts/{obj['name']}"
+            for obj in objects
+            if isinstance(obj, dict) and obj.get("name")
+        }
+
+        rows = conn.execute(
+            "SELECT id, file_path FROM receipts WHERE file_path LIKE 'http%'"
+        ).fetchall()
+
+        ghost_ids = []
+        for row in rows:
+            rid = row[0]
+            url = row[1] or ""
+            object_path = _supabase_object_path_from_url(url, bucket)
+            if object_path is None:
+                continue
+            if object_path not in valid_paths:
+                ghost_ids.append(rid)
+
+        for rid in ghost_ids:
+            conn.execute("DELETE FROM receipts WHERE id=?", (int(rid),))
+        if ghost_ids:
+            conn.commit()
+        return len(ghost_ids)
+    except Exception as e:
+        print(f"⚠️ Bucket reconciliation skipped: {e}")
+        return 0
+
+
+def list_bucket_contents() -> list[dict] | None:
+    """Return all objects in the Supabase receipts/ folder, or None on error.
+
+    Used by the Settings diagnostics panel to show what's actually in the bucket.
+    Returns a list of dicts with at least 'name' and 'object_path' keys.
+    """
+    if not is_cloud_mode():
+        return None
+    for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_BUCKET"):
+        if k not in st.secrets:
+            return None
+    try:
+        bucket = st.secrets["SUPABASE_BUCKET"]
+        supabase = get_supabase_client()
+        objects = supabase.storage.from_(bucket).list(
+            "receipts", {"limit": 1000, "offset": 0}
+        )
+        if not isinstance(objects, list):
+            return None
+        result = []
+        for obj in objects:
+            if isinstance(obj, dict) and obj.get("name"):
+                path = f"receipts/{obj['name']}"
+                result.append({
+                    "name": obj["name"],
+                    "object_path": path,
+                    "public_url": supabase.storage.from_(bucket).get_public_url(path),
+                    "size": obj.get("metadata", {}).get("size", "?"),
+                    "created_at": obj.get("created_at", "?"),
+                })
+        return result
+    except Exception as e:
+        return None
+
+
+def perform_ocr(uploaded_file) -> str:
     try:
         import pytesseract
+        uploaded_file.seek(0)
         text = pytesseract.image_to_string(Image.open(uploaded_file))
         return text.strip() or "No text detected."
     except Exception:
         return "OCR unavailable – install Tesseract OCR on your system."
 
-def export_to_csv(table_name):
-    from db.db_utils import get_connection
-    conn = get_connection()
-    df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
-    conn.close()
-    return df.to_csv(index=False).encode('utf-8')
 
-def import_csv(uploaded_csv, table_name):
-    from db.db_utils import get_connection
+# ====================== IMPORT / EXPORT ======================
+
+_ALLOWED_TABLES = frozenset({
+    "budget_categories", "expenses", "tasks", "receipts",
+    "permits", "qol_ideas", "phases", "project_config",
+})
+
+
+def export_to_csv(table_name: str) -> bytes:
+    if table_name not in _ALLOWED_TABLES:
+        raise ValueError(f"Cannot export unknown table: {table_name}")
+    from db.db_utils import get_connection, read_df
+    conn = get_connection()
+    df = read_df(f"SELECT * FROM {table_name}", conn)
+    conn.close()
+    return df.to_csv(index=False).encode("utf-8")
+
+
+def import_csv(uploaded_csv, table_name: str):
+    if table_name not in _ALLOWED_TABLES:
+        raise ValueError(f"Cannot import into unknown table: {table_name}")
+    from db.db_utils import get_connection, DB_MODE
     df = pd.read_csv(uploaded_csv)
     conn = get_connection()
-    df.to_sql(table_name, conn, if_exists='append', index=False)
+    if DB_MODE == "local":
+        df.to_sql(table_name, conn, if_exists="append", index=False)
+    else:
+        # libsql: insert row by row
+        cols = ", ".join(df.columns)
+        placeholders = ", ".join(["?"] * len(df.columns))
+        for _, row in df.iterrows():
+            conn.execute(
+                f"INSERT INTO {table_name} ({cols}) VALUES ({placeholders})",
+                list(row),
+            )
+    conn.commit()
     conn.close()
+
 
 ================================================================================
 FILE: utils\mobile_css.py
 Path: C:\Python Projects\Home_Tracker\utils\mobile_css.py
-Size: 1.3 KB
+Size: 7.8 KB
 ================================================================================
 
 import streamlit as st
 
+
 def apply_mobile_optimizations():
-    """Global mobile/PWA improvements – tighter spacing, better scrolling, smaller fonts"""
+    """iOS PWA-first CSS + meta tag injection via JS.
+
+    Covers: safe-area insets, touch targets ≥44px, no-zoom on input focus,
+    compact layout, horizontal-scroll tables, and smooth iOS scrolling.
+    """
+
+    # Inject iOS PWA meta tags into <head> via JS (Streamlit can't do this natively)
+    st.markdown("""
+    <script>
+    (function () {
+        var tags = [
+            ['apple-mobile-web-app-capable',          'yes'],
+            ['apple-mobile-web-app-status-bar-style', 'black-translucent'],
+            ['apple-mobile-web-app-title',            "Crowe's Nest"],
+            ['mobile-web-app-capable',                'yes'],
+            ['theme-color',                           '#0f1c12'],
+            ['format-detection',                      'telephone=no']
+        ];
+        tags.forEach(function (t) {
+            if (!document.querySelector('meta[name="' + t[0] + '"]')) {
+                var m = document.createElement('meta');
+                m.name = t[0];
+                m.content = t[1];
+                document.head.appendChild(m);
+            }
+        });
+        // Extend viewport to cover the notch / home bar
+        var vp = document.querySelector('meta[name="viewport"]');
+        if (vp) vp.content = 'width=device-width, initial-scale=1.0, viewport-fit=cover';
+    })();
+    </script>
+    """, unsafe_allow_html=True)
+
     st.markdown("""
     <style>
+        /* ── iOS safe-area custom properties ─────────────────────────── */
+        :root {
+            --sat: env(safe-area-inset-top,    0px);
+            --sar: env(safe-area-inset-right,  0px);
+            --sab: env(safe-area-inset-bottom, 0px);
+            --sal: env(safe-area-inset-left,   0px);
+        }
+
+        /* Prevent iOS font-size inflation on orientation change */
+        html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+        /* Remove blue tap flash on all elements */
+        * { -webkit-tap-highlight-color: rgba(0, 0, 0, 0); }
+
+        /* Smooth momentum scrolling for main content on iOS */
+        section[data-testid="stMain"] > div {
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* ── Hide Streamlit default nav ───────────────────────────────── */
+        [data-testid="stSidebarNav"] { display: none !important; }
+
+        /* ── Mobile styles (≤ 768 px) ────────────────────────────────── */
         @media (max-width: 768px) {
+
+            /* Tight layout respecting notch + home indicator */
             .block-container {
-                padding-top: 0.5rem !important;
-                padding-bottom: 0.5rem !important;
-                padding-left: 0.5rem !important;
-                padding-right: 0.5rem !important;
+                padding-top:    max(0.75rem, var(--sat)) !important;
+                /* Extra bottom clearance so the Quick Log FAB (48px + 72px offset) never covers content */
+                padding-bottom: max(calc(130px + var(--sab)), 2rem) !important;
+                padding-left:   max(0.5rem,  var(--sal)) !important;
+                padding-right:  max(0.5rem,  var(--sar)) !important;
+                max-width: 100% !important;
             }
-            
-            /* Make data editors & tables scroll horizontally on phones */
-            .stDataEditor, .stDataFrame, .stTable {
+
+            /* ── Touch-friendly buttons (Apple HIG: min 44 × 44 pt) ──── */
+            .stButton > button {
+                min-height: 48px !important;
+                font-size: 1rem !important;
+                padding: 0.6rem 1.2rem !important;
+                touch-action: manipulation !important;
+                user-select: none !important;
+                -webkit-user-select: none !important;
+            }
+
+            /* ── Prevent iOS zoom on input focus (font-size must be ≥16px) */
+            input, select, textarea,
+            [data-testid="stTextInput"] input,
+            [data-testid="stNumberInput"] input,
+            [data-testid="stDateInput"] input,
+            [data-testid="stSelectbox"] div[data-baseweb="select"] input,
+            [data-testid="stTextArea"] textarea {
+                font-size: 16px !important;
+            }
+
+            /* ── Horizontal scroll for wide tables / data editors ──────── */
+            .stDataEditor, .stDataFrame,
+            [data-testid="stDataFrame"],
+            [data-testid="stDataEditor"] {
                 overflow-x: auto !important;
+                -webkit-overflow-scrolling: touch !important;
             }
-            
-            /* Smaller headings and metrics on mobile */
-            h1 { font-size: 1.65rem !important; }
-            h2 { font-size: 1.4rem !important; }
-            .stMetric { font-size: 0.95rem !important; }
-            
-            /* Gantt & Plotly charts get better proportions */
-            .stPlotlyChart {
-                margin-bottom: 1rem !important;
+
+            /* ── Headings ───────────────────────────────────────────────── */
+            h1 { font-size: 1.45rem !important; margin-bottom: 0.4rem !important; }
+            h2 { font-size: 1.2rem  !important; }
+            h3 { font-size: 1.05rem !important; }
+
+            /* ── Metrics ────────────────────────────────────────────────── */
+            [data-testid="stMetric"] label           { font-size: 0.78rem !important; }
+            [data-testid="stMetric"] [data-testid="stMetricValue"] {
+                font-size: 1.2rem !important;
             }
-            
-            /* Sidebar navigation looks cleaner */
-            .stSidebar .stRadio, .stSidebar .stSelectbox {
-                font-size: 0.95rem !important;
+
+            /* ── Charts ─────────────────────────────────────────────────── */
+            .stPlotlyChart { margin-bottom: 0.75rem !important; }
+
+            /* ── Sidebar: home-indicator safe area ──────────────────────── */
+            [data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+                padding-bottom: calc(1rem + var(--sab)) !important;
             }
+
+            /* ── File uploader: compact on mobile ───────────────────────── */
+            [data-testid="stFileUploader"] section {
+                padding: 0.5rem !important;
+            }
+
+            /* ── Expander headers: touch target ─────────────────────────── */
+            .streamlit-expanderHeader,
+            details > summary {
+                min-height: 44px !important;
+                display: flex !important;
+                align-items: center !important;
+            }
+
+            /* ── Tabs: bigger tap area ───────────────────────────────────── */
+            [data-testid="stTabs"] button {
+                font-size: 0.88rem !important;
+                padding: 0.5rem 0.6rem !important;
+                min-height: 44px !important;
+            }
+
+            /* ── Forms: slight card feel ─────────────────────────────────── */
+            [data-testid="stForm"] {
+                border-radius: 8px !important;
+                padding: 0.75rem !important;
+            }
+
+            /* ── Alerts: compact ─────────────────────────────────────────── */
+            [data-testid="stAlert"] {
+                font-size: 0.9rem !important;
+                padding: 0.5rem 0.75rem !important;
+            }
+
+            /* ── Camera input: full width ────────────────────────────────── */
+            [data-testid="stCameraInput"] { width: 100% !important; }
+
+            /* ── Reduce excess gap between elements ──────────────────────── */
+            .element-container { margin-bottom: 0.3rem !important; }
+
+            /* ── Prevent button text selection on long-press ─────────────── */
+            button { user-select: none !important; -webkit-user-select: none !important; }
         }
     </style>
     """, unsafe_allow_html=True)
+
 
 ================================================================================
 FILE: utils\seeder.py
@@ -2611,122 +3838,154 @@ def seed_data(conn):
 ================================================================================
 FILE: utils\sidebar.py
 Path: C:\Python Projects\Home_Tracker\utils\sidebar.py
-Size: 4.7 KB
+Size: 5.9 KB
 ================================================================================
 
 import streamlit as st
 from datetime import date
-from db.db_utils import get_project_config, get_connection, get_current_focus
+from db.db_utils import get_project_config, get_connection, get_current_focus, is_cloud_mode
 from utils.helpers import save_uploaded_file
 from utils.mobile_css import apply_mobile_optimizations
 
+
 def render_sidebar():
-    """Shared sidebar – mobile CSS + hides default nav + fixed Quick Log dialog"""
-    
-    # === GLOBAL FIXES ===
-    st.markdown("""
-    <style>
-        [data-testid="stSidebarNav"] { display: none !important; }
-    </style>
-    """, unsafe_allow_html=True)
+    """Shared sidebar — mobile/PWA CSS, hidden default nav, Quick Log dialog."""
 
     apply_mobile_optimizations()
 
-    # ====================== SIDEBAR CONTENT ======================
     config = get_project_config()
-    
+
     with st.sidebar:
         st.title("🐦‍⬛ Crowe's Nest Build")
+
+        if not config:
+            st.error(
+                "❌ Database connection failed.\n\n"
+                "Check that **TURSO_URL** and **TURSO_AUTH_TOKEN** are set correctly "
+                "in Streamlit Cloud → Settings → Secrets. "
+                "Make sure you paste the full token with no truncation."
+            )
+            # Still render nav so user can reach Settings page to diagnose
+            st.page_link("pages/09_⚙️_Settings.py", label="⚙️ Settings", icon="⚙️")
+            return
+
         st.caption(f"📍 {config['address']}\n🗓️ Started {config['start_date']}")
         st.divider()
-        
-        # Budget metrics
-        st.metric("Total Budget", f"${config['total_budget']:,.0f}")
-        conn = get_connection()
-        spent = conn.execute("SELECT COALESCE(SUM(amount),0) FROM expenses").fetchone()[0]
-        conn.close()
-        st.metric("Spent", f"${spent:,.0f}", f"Remaining ${config['total_budget']-spent:,.0f}")
-        
-        st.divider()
-        
-        # Navigation
-        st.page_link("pages/01_🏠_Dashboard.py", label="🏠 Dashboard", icon="🏠")
-        st.page_link("pages/02_🛤️_Roadmap.py", label="🛤️ Roadmap", icon="🛤️")
-        st.page_link("pages/03_💰_Budget.py", label="💰 Budget", icon="💰")
-        st.page_link("pages/04_📖_Site_Diary.py", label="📖 Site Diary", icon="📖")
-        st.page_link("pages/05_📄_Documents.py", label="📁 All Files Hub", icon="📁")
-        st.page_link("pages/06_✅_Checklist.py", label="✅ Checklist", icon="✅")
-        st.page_link("pages/07_🌳_QOL_Futureproofing.py", label="🌳 QOL Tracker", icon="🌳")
-        st.page_link("pages/08_🤖_AI_Assistant.py", label="🤖 AI Assistant", icon="🤖")
-        st.page_link("pages/09_⚙️_Settings.py", label="⚙️ Settings", icon="⚙️")
-        
-        st.divider()
-        
-        # Quick Log Button (inside sidebar)
-        if st.button("➕ Quick Log (Photo / Receipt)", type="primary", use_container_width=True):
-                quick_log_dialog()   # ← This opens the dialog
 
-# ====================== QUICK LOG DIALOG (PROPER STREAMLIT DIALOG) ======================
+        # Budget snapshot
+        st.metric("Total Budget", f"${config['total_budget']:,.0f}")
+        try:
+            conn = get_connection()
+            spent = conn.execute("SELECT COALESCE(SUM(amount),0) FROM expenses").fetchone()[0]
+            conn.close()
+        except Exception:
+            spent = 0
+        st.metric("Spent", f"${spent:,.0f}", f"Remaining ${config['total_budget'] - spent:,.0f}")
+
+        st.divider()
+
+        # Navigation
+        st.page_link("pages/01_🏠_Dashboard.py",           label="🏠 Dashboard",    icon="🏠")
+        st.page_link("pages/02_🛤️_Roadmap.py",            label="🛤️ Roadmap",      icon="🛤️")
+        st.page_link("pages/03_💰_Budget.py",              label="💰 Budget",        icon="💰")
+        st.page_link("pages/04_📸_Photos.py",              label="📸 Photos",        icon="📸")
+        st.page_link("pages/05_📄_Documents.py",           label="📁 All Files Hub", icon="📁")
+        st.page_link("pages/06_✅_Checklist.py",           label="✅ Checklist",     icon="✅")
+        st.page_link("pages/07_🌳_QOL_Futureproofing.py", label="🌳 QOL Tracker",   icon="🌳")
+        st.page_link("pages/10_🌿_Inspo_Board.py",         label="🌿 Inspo Board",   icon="🌿")
+        st.page_link("pages/08_🤖_AI_Assistant.py",        label="🤖 AI Assistant",  icon="🤖")
+        st.page_link("pages/09_⚙️_Settings.py",           label="⚙️ Settings",      icon="⚙️")
+
+        st.divider()
+
+        # Storage health — warn only when Supabase is missing in cloud mode
+        if is_cloud_mode():
+            _missing = [k for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_BUCKET")
+                        if k not in st.secrets]
+            if _missing:
+                st.warning(f"⚠️ File uploads disabled\nMissing secrets: {', '.join(_missing)}")
+
+        if st.button("➕ Quick Log (Photo / Receipt)", type="primary", use_container_width=True):
+            quick_log_dialog()
+
+
+# ====================== QUICK LOG DIALOG ======================
 @st.dialog("Quick Log — On-Site Capture")
 def quick_log_dialog():
-    st.subheader("📸 Quick Log")
+    """Full-screen-friendly dialog optimised for one-handed phone use."""
     current_focus = get_current_focus()
-    
-    col_cam, col_file = st.columns(2)
-    with col_cam:
-        camera_photo = st.camera_input("Take photo now", key="sidebar_cam")
-    with col_file:
-        uploaded = st.file_uploader("Or upload file", 
-                                  type=["jpg","jpeg","png","pdf"], 
-                                  key="sidebar_file")
-    
+
+    # Camera first (primary use case on site), file upload as fallback
+    camera_photo = st.camera_input("📷 Take photo", key="sidebar_cam")
+    uploaded = st.file_uploader(
+        "Or choose a file",
+        type=["jpg", "jpeg", "png", "pdf"],
+        key="sidebar_file",
+    )
+
     file_to_save = camera_photo if camera_photo is not None else uploaded
-    notes = st.text_area("Notes / Description", height=100)
-    
-    # Link options
+    if file_to_save:
+        st.caption("✅ File ready")
+
+    notes = st.text_area("Notes / Description", height=80)
+
+    # Smart auto-link to current task / permit
     link_options = ["None"]
     default_index = 0
     if current_focus.get("task"):
-        link_options.append(f"Current Task: {current_focus['task']['title']}")
+        link_options.append(f"Task: {current_focus['task']['title']}")
         default_index = 1
     if current_focus.get("permit"):
-        link_options.append(f"Current Permit: {current_focus['permit']['name']}")
+        link_options.append(f"Permit: {current_focus['permit']['name']}")
         if not current_focus.get("task"):
             default_index = 1
-    
-    link_choice = st.selectbox("Link to", link_options, index=default_index)
-    
-    task_id = permit_id = None
-    if "Task" in link_choice and current_focus.get("task"):
-        task_id = current_focus["task"]["id"]
-    elif "Permit" in link_choice and current_focus.get("permit"):
-        permit_id = current_focus["permit"]["id"]
-    
-    if st.button("✅ Save & Close", type="primary", use_container_width=True):
-        if file_to_save:
-            file_url = save_uploaded_file(file_to_save)
-            conn = get_connection()
-            conn.execute("""INSERT INTO receipts 
-                (file_path, original_filename, upload_date, notes, file_category,
-                 linked_task_id, linked_permit_id, document_type)
-                VALUES (?,?,?,?,?,?,?,?)""",
-                (file_url, 
-                 getattr(file_to_save, 'name', 'camera_photo.jpg'),
-                 date.today().strftime("%Y-%m-%d"),
-                 notes, "quick_log", task_id, permit_id, "document"))
-            conn.commit()
-            conn.close()
-            st.success("✅ Saved and auto-linked!")
-            st.rerun()   # closes dialog automatically
-        else:
-            st.warning("Please take a photo or upload a file")
 
-    if st.button("Cancel"):
-        st.rerun()
+    link_choice = st.selectbox("Link to", link_options, index=default_index)
+
+    task_id = permit_id = None
+    if "Task:" in link_choice and current_focus.get("task"):
+        task_id = current_focus["task"]["id"]
+    elif "Permit:" in link_choice and current_focus.get("permit"):
+        permit_id = current_focus["permit"]["id"]
+
+    col_save, col_cancel = st.columns(2)
+    with col_save:
+        if st.button("✅ Save", type="primary", use_container_width=True):
+            if file_to_save:
+                file_url = save_uploaded_file(file_to_save)
+                if file_url:
+                    conn = get_connection()
+                    conn.execute(
+                        """INSERT INTO receipts
+                            (file_path, original_filename, upload_date, notes,
+                             file_category, linked_task_id, linked_permit_id, document_type)
+                           VALUES (?,?,?,?,?,?,?,?)""",
+                        (
+                            file_url,
+                            getattr(file_to_save, "name", "camera_photo.jpg"),
+                            date.today().strftime("%Y-%m-%d"),
+                            notes,
+                            "photo",        # consistent with Site Diary filter
+                            task_id,
+                            permit_id,
+                            "document",
+                        ),
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.success("✅ Saved!")
+                    st.rerun()
+            else:
+                st.warning("Take a photo or choose a file first.")
+
+    with col_cancel:
+        if st.button("Cancel", use_container_width=True):
+            st.rerun()
+
 
 ====================================================================================================
 EXTRACTION COMPLETE
-Total files included : 25
+Total files included : 29
 Files skipped        : 3
 Output file          : Home_Tracker_codebase.txt
-==================================================================================================== ..
+====================================================================================================
