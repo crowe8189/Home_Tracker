@@ -48,6 +48,7 @@ def render_sidebar():
         st.page_link("pages/04_📸_Photos.py",              label="📸 Photos",        icon="📸")
         st.page_link("pages/05_📄_Documents.py",           label="📁 All Files Hub", icon="📁")
         st.page_link("pages/06_✅_Checklist.py",           label="✅ Checklist",     icon="✅")
+        st.page_link("pages/11_📐_Measurements.py",        label="📐 Measurements",  icon="📐")
         st.page_link("pages/07_🌳_QOL_Futureproofing.py", label="🌳 QOL Tracker",   icon="🌳")
         st.page_link("pages/10_🌿_Inspo_Board.py",         label="🌿 Inspo Board",   icon="🌿")
         st.page_link("pages/08_🤖_AI_Assistant.py",        label="🤖 AI Assistant",  icon="🤖")

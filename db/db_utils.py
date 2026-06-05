@@ -181,6 +181,24 @@ def init_db():
         FOREIGN KEY(linked_task_id) REFERENCES tasks(id)
     )""")
 
+    # Measurements — model dimensions (from the FreeCAD house model) vs. the
+    # actual tape readings at the framed house. `key` is the stable id from the
+    # CSV export so re-imports update model values without losing actuals.
+    c.execute("""CREATE TABLE IF NOT EXISTS measurements (
+        id INTEGER PRIMARY KEY,
+        key TEXT UNIQUE,
+        category TEXT,
+        item TEXT,
+        dimension TEXT,
+        model_value_ft REAL,
+        model_value_label TEXT,
+        actual_value_ft REAL,
+        status TEXT DEFAULT 'not_measured'
+            CHECK(status IN ('not_measured','verified','mismatch')),
+        notes TEXT,
+        measured_date TEXT
+    )""")
+
     conn.commit()
 
     # === TURSO-SAFE MIGRATION: add columns that didn't exist at initial deploy ===
@@ -210,6 +228,26 @@ def init_db():
     if c.fetchone()[0] == 0:
         seed_data(conn)
         print(f"✅ Crowe's Nest Build seeded in {DB_MODE} mode!")
+
+    # Seed measurements (model dimensions) if the table is empty -- runs on every
+    # cold start so the data is present no matter which page is opened first, and
+    # works on the cloud deploy where the FreeCAD CSV export isn't available.
+    try:
+        if c.execute("SELECT COUNT(*) FROM measurements").fetchone()[0] == 0:
+            from utils.measurement_seed import get_seed_rows
+            for r in get_seed_rows():
+                conn.execute(
+                    """INSERT OR IGNORE INTO measurements
+                       (key, category, item, dimension, model_value_ft,
+                        model_value_label, status)
+                       VALUES (?,?,?,?,?,?,'not_measured')""",
+                    (r["key"], r["category"], r["item"], r["dimension"],
+                     r["model_value_ft"], r["model_value_label"]),
+                )
+            conn.commit()
+            print(f"✅ Seeded {len(get_seed_rows())} measurements in {DB_MODE} mode!")
+    except Exception as e:
+        print(f"⚠️ Measurement seed note: {e}")
 
     # Cloud: prune orphaned receipts on every cold start. Two passes:
     #   1. Local-path orphans  — file_path is NULL/empty/non-http (uploads/ is wiped on restart).
@@ -293,6 +331,90 @@ def update_project_config(name, total_budget, start_date, address):
     )
     conn.commit()
     conn.close()
+
+
+# ====================== MEASUREMENTS ======================
+def upsert_measurement_rows(rows):
+    """Insert/refresh model values for a list of measurement rows without losing
+    any actuals already entered. `rows` = list of dicts with keys:
+    key, category, item, dimension, model_value_ft, model_value_label.
+    Existing rows (matched by `key`) get their MODEL columns updated; new keys
+    are inserted. Returns (inserted, updated)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    inserted = updated = 0
+    for r in rows:
+        existing = cur.execute(
+            "SELECT id FROM measurements WHERE key=?", (r["key"],)
+        ).fetchone()
+        if existing:
+            cur.execute(
+                """UPDATE measurements
+                   SET category=?, item=?, dimension=?,
+                       model_value_ft=?, model_value_label=?
+                   WHERE key=?""",
+                (r["category"], r["item"], r["dimension"],
+                 r["model_value_ft"], r["model_value_label"], r["key"]),
+            )
+            updated += 1
+        else:
+            cur.execute(
+                """INSERT INTO measurements
+                   (key, category, item, dimension, model_value_ft,
+                    model_value_label, status)
+                   VALUES (?,?,?,?,?,?,'not_measured')""",
+                (r["key"], r["category"], r["item"], r["dimension"],
+                 r["model_value_ft"], r["model_value_label"]),
+            )
+            inserted += 1
+    conn.commit()
+    conn.close()
+    return inserted, updated
+
+
+def get_measurements(category=None):
+    conn = get_connection()
+    if category:
+        df = read_df(
+            "SELECT * FROM measurements WHERE category=? ORDER BY id", conn, (category,)
+        )
+    else:
+        df = read_df("SELECT * FROM measurements ORDER BY id", conn)
+    conn.close()
+    return df
+
+
+def get_measurement_categories():
+    conn = get_connection()
+    df = read_df(
+        "SELECT DISTINCT category FROM measurements ORDER BY category", conn
+    )
+    conn.close()
+    return df["category"].tolist() if not df.empty else []
+
+
+def save_measurement_actual(key, actual_value_ft, status, notes, measured_date):
+    """Persist a tape reading for one measurement item."""
+    conn = get_connection()
+    conn.execute(
+        """UPDATE measurements
+           SET actual_value_ft=?, status=?, notes=?, measured_date=?
+           WHERE key=?""",
+        (actual_value_ft, status, notes, measured_date, key),
+    )
+    conn.commit()
+    conn.close()
+
+
+def measurement_progress():
+    """Return (measured, total) counts for the progress indicator."""
+    conn = get_connection()
+    total = conn.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
+    done = conn.execute(
+        "SELECT COUNT(*) FROM measurements WHERE status != 'not_measured'"
+    ).fetchone()[0]
+    conn.close()
+    return done, total
 
 
 def get_current_focus():
